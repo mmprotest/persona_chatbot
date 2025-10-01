@@ -240,8 +240,7 @@ def render_sidebar() -> None:
             st.markdown(st.session_state.last_generation.get("plan", "_No plan computed._"))
 
 
-def render_conversation() -> None:
-    agent = get_agent()
+def render_conversation(agent, pending_user_message: str | None = None) -> None:
     for index, turn in enumerate(agent.conversation.turns):
         with st.chat_message(turn.role):
             is_editing = st.session_state.editing.get(index, False)
@@ -270,6 +269,12 @@ def render_conversation() -> None:
                         _rerun()
                         return
 
+    if pending_user_message:
+        with st.chat_message("user"):
+            st.markdown(pending_user_message)
+        with st.chat_message("assistant"):
+            st.markdown("_Thinking..._")
+
 
 def main() -> None:
     agent = get_agent()
@@ -280,11 +285,23 @@ def main() -> None:
         "local or OpenAI-compatible LLMs."
     )
 
-    render_conversation()
+    conversation_placeholder = st.container()
+    pending_prompt = st.session_state.pop("pending_user_message", None)
+
+    if pending_prompt:
+        with conversation_placeholder:
+            render_conversation(agent, pending_user_message=pending_prompt)
+        with st.spinner("Crafting a response..."):
+            result = agent.generate_response(pending_prompt)
+        st.session_state.last_generation = result
+        _rerun()
+        return
+
+    with conversation_placeholder:
+        render_conversation(agent)
 
     if prompt := st.chat_input("Share a thought..."):
-        result = agent.generate_response(prompt)
-        st.session_state.last_generation = result
+        st.session_state.pending_user_message = prompt
         _rerun()
 
 
