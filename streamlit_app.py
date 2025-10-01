@@ -182,6 +182,8 @@ def _set_agent(agent) -> None:
     else:
         st.session_state.editing.clear()
     st.session_state.last_generation = None
+    st.session_state.current_thought_stream = None
+    st.session_state.current_thought_turn = None
 
 
 def set_active_persona(persona_id: int) -> None:
@@ -213,6 +215,10 @@ def get_agent():
         st.session_state.editing = {}
     if "last_generation" not in st.session_state:
         st.session_state.last_generation = None
+    if "current_thought_stream" not in st.session_state:
+        st.session_state.current_thought_stream = None
+    if "current_thought_turn" not in st.session_state:
+        st.session_state.current_thought_turn = None
     return st.session_state.agent
 
 
@@ -241,6 +247,8 @@ def render_sidebar() -> None:
         if st.button("Reset Conversation", use_container_width=True):
             agent.reset()
             st.session_state.last_generation = None
+            st.session_state.current_thought_stream = None
+            st.session_state.current_thought_turn = None
             if "editing" in st.session_state:
                 st.session_state.editing.clear()
             _rerun()
@@ -303,6 +311,8 @@ def render_sidebar() -> None:
                 agent.apply_persona_suggestion(suggestion)
                 st.session_state.clear_persona_suggestion_input = True
                 st.session_state.last_generation = None
+                st.session_state.current_thought_stream = None
+                st.session_state.current_thought_turn = None
                 _rerun()
             else:
                 st.warning("Enter a suggestion before applying the update.")
@@ -350,14 +360,24 @@ def render_conversation(agent) -> None:
                     if st.button("Cancel", key=f"cancel_{index}"):
                         toggle_edit(index, False)
                         _rerun()
-                        return
+                        return (None, None)
             else:
                 st.markdown(turn.content)
                 if turn.editable:
                     if st.button("Edit", key=f"edit_{index}"):
                         toggle_edit(index, True)
                         _rerun()
-                        return
+                        return (None, None)
+
+
+def render_persona_studio(agent) -> None:
+    """Render creation, editing, and deletion tools for personas."""
+
+    if message := st.session_state.pop("persona_studio_message", None):
+        st.success(message)
+    if warning := st.session_state.pop("persona_studio_warning", None):
+        st.warning(warning)
+
 
 
 def render_persona_studio(agent) -> None:

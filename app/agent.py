@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, Iterator, List, Tuple
 
 from .llm.factory import create_llm_client
 from .memory import long_term
@@ -81,7 +81,7 @@ class PersonaAgent:
         instructions = (
             f"You are {self.persona.name}. Reply in the first person, stay grounded in the persona's "
             "voice, and keep continuity with the ongoing chat. Narrate any internal thinking in the "
-            "first person as well, and let your answer feel considered and empathetic. It is "
+            "first person as well. It is "
             "mandatory to include a brief first-person inner monologue before every reply so the "
             "user can follow your live reasoning."
         )
@@ -240,13 +240,17 @@ class PersonaAgent:
         user_message_clean = user_message.strip()
         if not user_message_clean:
             self._ensure_session()
-            return {
-                "draft": "",
-                "final": "",
-                "reflection": "",
-                "context": "",
-                "plan": "",
+            yield {
+                "type": "complete",
+                "result": {
+                    "draft": "",
+                    "final": "",
+                    "reflection": "",
+                    "context": "",
+                    "plan": "",
+                },
             }
+            return
 
         if scenario_prompt is not None:
             self.set_scenario_prompt(scenario_prompt)
@@ -292,6 +296,23 @@ class PersonaAgent:
             "context": context_summary,
             "plan": plan,
         }
+
+    def generate_response(self, user_message: str) -> Dict[str, str]:
+        final_result: Dict[str, str] | None = None
+        for event in self.stream_response(user_message):
+            if event.get("type") == "complete":
+                result = event.get("result")
+                if isinstance(result, dict):
+                    final_result = result  # type: ignore[assignment]
+        if final_result is None:
+            return {
+                "draft": "",
+                "final": "",
+                "reflection": "",
+                "context": "",
+                "plan": "",
+            }
+        return final_result
 
     def edit_turn(self, index: int, new_content: str) -> None:
         self.conversation.update(index, new_content)
