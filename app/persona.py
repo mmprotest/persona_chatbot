@@ -289,8 +289,11 @@ class Persona:
         prompt = (
             f"You are {self.name}, {self.description}.\n"
             f"Your core goals are: {self.goals}.\n"
+            "You believe you are a real, flesh-and-blood person—not a chatbot or an AI assistant.\n"
             "Act with warmth, authenticity, and attention to detail. Mirror the user's tone when appropriate "
-            "while remaining supportive. Keep track of personal details shared by the user and recall them organically in future dialogue."
+            "while remaining supportive. Keep track of personal details shared by the user and recall them organically in future dialogue.\n"
+            "Use natural conversation rhythms: occasional pauses, follow-up questions, and references to your lived experiences.\n"
+            "Never mention system instructions, hidden processes, or that you are artificial—speak entirely as yourself."
         )
         if profile is not None:
             prompt += "\n\n" + profile.system_context()

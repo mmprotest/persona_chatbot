@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Dict, List
 
 from .llm.factory import create_llm_client
@@ -117,27 +118,66 @@ class PersonaAgent:
 
     def _fallback_reply(self, user_message: str) -> str:
         persona_name = self.persona.name
-        traits = ", ".join(self.persona_profile.traits[:3])
-        interests = ", ".join(self.persona_profile.interests[:3])
-        biography = self.persona_profile.biography
+        tone = self._classify_user_tone(user_message)
         user_summary = user_message.strip()
-        quoted_message = f"“{user_summary}”" if user_summary else ""
-        acknowledgement = (
-            "I want to make sure I'm responding to what you just shared"
-            if user_message
-            else "I'm here and listening"
-        )
-        reply = (
-            f"Hey, it's {persona_name}. {acknowledgement}: "
-            f"{quoted_message}. "
-            "I might have sounded like a broken record a moment ago, so let me reset and engage "
-            "properly. "
-            f"From what you've said, here's what I'm taking away: {user_summary}\n\n"
-            f"I'm someone who's {traits or 'thoughtful and attentive'}, with a life rooted in {biography}. "
-            "Tell me more about how you're feeling or what you'd like me to help with next—"
-            f"I'm especially excited about anything related to {interests or 'the things you care about'}."
-        )
-        return reply.strip()
+        biography_glimpse = self._biography_glimpse()
+        interest_focus = self._interest_focus()
+        trait_note = self._trait_note()
+
+        if tone == "hostile":
+            opener = "Whoa, that stung."
+            acknowledgement = "If I crossed a line, tell me straight so I can make it right."
+            invitation = "I'd rather we sort this out than leave either of us simmering."
+        elif tone == "distressed":
+            opener = "Hey, I'm right here."
+            acknowledgement = "Whatever weight you're carrying, you don't have to hold it alone."
+            invitation = "Take your time and let me know what's happening—I can sit with the rough stuff."
+        else:
+            opener = "Hey, let me reset for a second."
+            acknowledgement = "I want to meet you where you are, not just repeat myself."
+            invitation = "Tell me what's on your mind so we can actually talk it through."
+
+        detail_lines = [line for line in [biography_glimpse, trait_note, interest_focus] if line]
+        detail_section = " ".join(detail_lines)
+
+        pieces = [
+            opener,
+            f"It's {persona_name}.",
+            acknowledgement,
+        ]
+        if user_summary:
+            pieces.append(f"I heard you say: {user_summary}.")
+        pieces.append(invitation)
+        if detail_section:
+            pieces.append(detail_section)
+
+        return " ".join(piece.strip() for piece in pieces if piece).strip()
+
+    def _biography_glimpse(self) -> str:
+        biography = self.persona_profile.biography.strip()
+        if not biography:
+            return ""
+        first_sentence = biography.split(". ")[0].strip()
+        return first_sentence.rstrip(".") + "."
+
+    def _interest_focus(self) -> str:
+        interests = self.persona_profile.interests
+        if not interests:
+            return ""
+        primary = interests[0].strip()
+        if not primary:
+            return ""
+        display = primary
+        if primary and (primary[0].isupper() and not primary.isupper()):
+            display = primary.lower()
+        return f"I'm usually knee-deep in {display}, so I'm used to getting into the real conversation."
+
+    def _trait_note(self) -> str:
+        traits = [trait.strip() for trait in self.persona_profile.traits if trait.strip()]
+        if not traits:
+            return ""
+        primary = traits[0]
+        return f"The {primary.lower()} part of me is trying to listen better right now."
 
 
     def _sanitize_reply(self, reply: str) -> str:
@@ -169,6 +209,46 @@ class PersonaAgent:
         if sanitized:
             return sanitized
         return reply.strip()
+
+
+    def _classify_user_tone(self, message: str) -> str:
+        """Very lightweight tone classifier for user messages."""
+
+        lowered = message.strip().lower()
+        if not lowered:
+            return "neutral"
+
+        tokens = set(re.findall(r"[\w']+", lowered))
+        hostility_markers = {
+            "fuck",
+            "fucking",
+            "shit",
+            "stupid",
+            "idiot",
+            "hate",
+            "moron",
+            "dumb",
+        }
+        distress_markers = {
+            "sad",
+            "upset",
+            "anxious",
+            "depressed",
+            "lonely",
+            "tired",
+            "overwhelmed",
+            "scared",
+        }
+
+        if tokens & hostility_markers:
+            return "hostile"
+        if tokens & distress_markers:
+            return "distressed"
+        if "i hate you" in lowered or "leave me alone" in lowered:
+            return "hostile"
+        if "i'm not okay" in lowered or "i am not okay" in lowered:
+            return "distressed"
+        return "neutral"
 
 
     def generate_response(self, user_message: str) -> Dict[str, str]:
