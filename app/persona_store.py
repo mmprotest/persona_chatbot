@@ -1,8 +1,7 @@
-"""Persistence helpers for persona records."""
+"""Persistence utilities for persona profiles."""
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -11,7 +10,6 @@ from typing import Iterable, List, Optional
 
 from .config import config
 from .persona import Persona, PersonaProfile
-
 
 _TABLE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS personas (
@@ -29,17 +27,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_personas_name ON personas(name);
 """
 
 
-def _ensure_database(path: str) -> None:
-    Path(os.path.dirname(path) or ".").mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as conn:
+def _ensure_database(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(str(path)) as conn:
         conn.executescript(_TABLE_SCHEMA)
 
 
 @contextmanager
 def _connect() -> Iterable[sqlite3.Connection]:
-    db_path = config.memory.database_path
+    db_path = Path(config.memory.database_path)
     _ensure_database(db_path)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(str(db_path))
     try:
         yield conn
     finally:
