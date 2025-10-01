@@ -182,6 +182,8 @@ def _set_agent(agent) -> None:
     else:
         st.session_state.editing.clear()
     st.session_state.last_generation = None
+    st.session_state.current_thought_stream = None
+    st.session_state.current_thought_turn = None
 
 
 def set_active_persona(persona_id: int) -> None:
@@ -213,6 +215,10 @@ def get_agent():
         st.session_state.editing = {}
     if "last_generation" not in st.session_state:
         st.session_state.last_generation = None
+    if "current_thought_stream" not in st.session_state:
+        st.session_state.current_thought_stream = None
+    if "current_thought_turn" not in st.session_state:
+        st.session_state.current_thought_turn = None
     return st.session_state.agent
 
 
@@ -241,6 +247,8 @@ def render_sidebar() -> None:
         if st.button("Reset Conversation", use_container_width=True):
             agent.reset()
             st.session_state.last_generation = None
+            st.session_state.current_thought_stream = None
+            st.session_state.current_thought_turn = None
             if "editing" in st.session_state:
                 st.session_state.editing.clear()
             _rerun()
@@ -303,6 +311,8 @@ def render_sidebar() -> None:
                 agent.apply_persona_suggestion(suggestion)
                 st.session_state.clear_persona_suggestion_input = True
                 st.session_state.last_generation = None
+                st.session_state.current_thought_stream = None
+                st.session_state.current_thought_turn = None
                 _rerun()
             else:
                 st.warning("Enter a suggestion before applying the update.")
@@ -350,14 +360,176 @@ def render_conversation(agent) -> None:
                     if st.button("Cancel", key=f"cancel_{index}"):
                         toggle_edit(index, False)
                         _rerun()
-                        return
+                        return (None, None)
             else:
                 st.markdown(turn.content)
                 if turn.editable:
                     if st.button("Edit", key=f"edit_{index}"):
                         toggle_edit(index, True)
                         _rerun()
-                        return
+                        return (None, None)
+
+
+def render_persona_studio(agent) -> None:
+    """Render creation, editing, and deletion tools for personas."""
+
+    if message := st.session_state.pop("persona_studio_message", None):
+        st.success(message)
+    if warning := st.session_state.pop("persona_studio_warning", None):
+        st.warning(warning)
+
+    personas = list_personas()
+
+    st.markdown("### Generate a new persona with AI support")
+    st.caption(
+        "Provide a name, description, and goals. If an API key is configured, the agent will draft a full persona profile."
+    )
+    with st.form("persona_ai_form"):
+        ai_name = st.text_input("Name", key="ai_name")
+        ai_description = st.text_area("Description", key="ai_description", height=80)
+        ai_goals = st.text_area("Goals", key="ai_goals", height=80)
+        ai_seed = st.text_area(
+            "Optional inspiration", key="ai_seed", height=80, help="Add quirks, backstory beats, or tone notes."
+        )
+        ai_set_active = st.checkbox(
+            "Set as active after creation",
+            value=True,
+            key="ai_set_active",
+            help="Switch the chat to use this persona right away.",
+        )
+        ai_submitted = st.form_submit_button("Generate Persona", use_container_width=True)
+    if ai_submitted:
+        if not ai_name.strip() or not ai_description.strip() or not ai_goals.strip():
+            st.session_state.persona_studio_warning = (
+                "Name, description, and goals are required to generate a persona."
+            )
+            _rerun()
+        persona_config = Persona(
+            name=ai_name.strip(),
+            description=ai_description.strip(),
+            goals=ai_goals.strip(),
+            seed_prompt=ai_seed.strip(),
+        )
+        new_agent = create_agent(persona_config=persona_config)
+        if ai_set_active:
+            _set_agent(new_agent)
+            st.session_state.persona_studio_message = (
+                f"Persona '{persona_config.name}' generated and activated."
+            )
+        else:
+            st.session_state.persona_studio_message = (
+                f"Persona '{persona_config.name}' generated and stored in your library."
+            )
+        for key in ["ai_name", "ai_description", "ai_goals", "ai_seed"]:
+            st.session_state[key] = ""
+        st.session_state.ai_set_active = True
+        _rerun()
+
+    st.markdown("### Manually craft a persona profile")
+    st.caption(
+        "Fill in as much detail as you'd like. Use pipe-separated values (e.g. `2020 | Moved cities | Found a new calling`) for timeline and relationships."
+    )
+    with st.form("persona_manual_form"):
+        manual_name = st.text_input("Name", key="manual_name")
+        manual_description = st.text_area("Description", key="manual_description", height=80)
+        manual_goals = st.text_area("Goals", key="manual_goals", height=80)
+        manual_seed = st.text_area(
+            "Optional inspiration", key="manual_seed", height=80, help="Store reference notes for this persona."
+        )
+        manual_biography = st.text_area("Biography", key="manual_biography", height=120)
+        manual_speaking_style = st.text_area(
+            "Speaking style", key="manual_speaking_style", height=80, help="Describe how the persona sounds when they speak."
+        )
+        manual_traits = st.text_area("Traits (one per line)", key="manual_traits", height=80)
+        manual_interests = st.text_area("Interests (one per line)", key="manual_interests", height=80)
+        manual_daily = st.text_area("Daily routine", key="manual_daily", height=80)
+        manual_timeline = st.text_area(
+            "Timeline entries (Year | Event | Impact per line)", key="manual_timeline", height=80
+        )
+        manual_relationships = st.text_area(
+            "Relationships (Name | Connection | Description per line)",
+            key="manual_relationships",
+            height=80,
+        )
+        manual_memories = st.text_area("Signature memories (one per line)", key="manual_memories", height=80)
+        manual_dialogues = st.text_area(
+            "Sample dialogues (separate scenes with blank lines, prefix with 'Scene: ...')",
+            key="manual_dialogues",
+            height=120,
+        )
+        manual_set_active = st.checkbox(
+            "Set as active after saving",
+            value=True,
+            key="manual_set_active",
+        )
+        manual_submitted = st.form_submit_button("Save Persona", use_container_width=True)
+    if manual_submitted:
+        if not manual_name.strip() or not manual_description.strip() or not manual_goals.strip():
+            st.session_state.persona_studio_warning = (
+                "Name, description, and goals are required for manual personas."
+            )
+            _rerun()
+        if not manual_biography.strip():
+            st.session_state.persona_studio_warning = "Add a biography so the persona feels unique."
+            _rerun()
+        try:
+            manual_profile = _profile_from_manual_inputs(
+                persona_name=manual_name.strip(),
+                description=manual_description.strip(),
+                goals=manual_goals.strip(),
+                biography=manual_biography.strip(),
+                speaking_style=manual_speaking_style.strip(),
+                traits_text=manual_traits,
+                interests_text=manual_interests,
+                daily_routine=manual_daily.strip(),
+                timeline_text=manual_timeline,
+                relationships_text=manual_relationships,
+                memories_text=manual_memories,
+                dialogues_text=manual_dialogues,
+            )
+        except Exception as exc:  # pragma: no cover - defensive guard for malformed inputs
+            st.session_state.persona_studio_warning = f"Unable to build persona profile: {exc}"[:400]
+            _rerun()
+        persona_config = Persona(
+            name=manual_name.strip(),
+            description=manual_description.strip(),
+            goals=manual_goals.strip(),
+            seed_prompt=manual_seed.strip(),
+        )
+        if manual_set_active:
+            new_agent = create_agent(persona_config=persona_config, persona_profile=manual_profile)
+            _set_agent(new_agent)
+            st.session_state.persona_studio_message = (
+                f"Persona '{persona_config.name}' saved and activated."
+            )
+        else:
+            upsert_persona(persona_config, manual_profile)
+            st.session_state.persona_studio_message = (
+                f"Persona '{persona_config.name}' saved to your library."
+            )
+        for key in [
+            "manual_name",
+            "manual_description",
+            "manual_goals",
+            "manual_seed",
+            "manual_biography",
+            "manual_speaking_style",
+            "manual_traits",
+            "manual_interests",
+            "manual_daily",
+            "manual_timeline",
+            "manual_relationships",
+            "manual_memories",
+            "manual_dialogues",
+        ]:
+            st.session_state[key] = ""
+        st.session_state.manual_set_active = True
+        _rerun()
+
+    st.markdown("### Edit existing personas")
+    if not personas:
+        st.info("No personas saved yet. Create one above to get started.")
+        return
 
 
 def render_persona_studio(agent) -> None:
