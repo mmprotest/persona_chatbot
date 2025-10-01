@@ -89,6 +89,8 @@ class PersonaAgent:
                 "content": (
                     "You are refining an assistant response based on reflection notes. Ensure the "
                     "voice matches the persona, and weave in relevant memories when natural."
+                    " Never disclose analysis, planning steps, or inner thoughts—only share the final"
+                    " conversational reply."
                 ),
             },
             {
@@ -137,6 +139,38 @@ class PersonaAgent:
         )
         return reply.strip()
 
+
+    def _sanitize_reply(self, reply: str) -> str:
+        """Remove accidental meta-commentary so the user only sees the response."""
+
+        lines: List[str] = []
+        blocked_prefixes = (
+            "analysis:",
+            "thoughts:",
+            "inner thoughts:",
+            "inner monologue:",
+            "plan:",
+            "reflection:",
+            "reasoning:",
+            "assistant's plan:",
+        )
+        for raw_line in reply.splitlines():
+            line = raw_line.strip()
+            if not line:
+                lines.append("")
+                continue
+            lowered = line.lower()
+            if lowered.startswith(blocked_prefixes):
+                continue
+            if lowered.startswith("[thinking") or lowered.startswith("(thinking"):
+                continue
+            lines.append(raw_line)
+        sanitized = "\n".join(lines).strip()
+        if sanitized:
+            return sanitized
+        return reply.strip()
+
+
     def generate_response(self, user_message: str) -> Dict[str, str]:
         user_message_clean = user_message.strip()
         if not user_message_clean:
@@ -171,16 +205,30 @@ class PersonaAgent:
                 ),
             }
         )
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Stay fully in character. Share only the final response—never your planning, "
+                    "analysis, or meta-commentary."
+                ),
+            }
+        )
         draft = self.llm.complete(messages, max_tokens=800)
         reflection = self._generate_reflection(user_message, draft)
         reflection_clean = reflection.strip()
         improved = self._apply_reflection(reflection, draft)
         final_reply = improved.strip()
         fallback_used = False
+        final_reply = self._sanitize_reply(final_reply)
+
         if self._needs_fallback(user_message, final_reply):
             fallback_used = True
             final_reply = self._fallback_reply(user_message)
             improved = final_reply
+
+        final_reply = self._sanitize_reply(final_reply)
+
         if not final_reply:
             draft_clean = draft.strip()
             if draft_clean:
