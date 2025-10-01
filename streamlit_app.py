@@ -300,6 +300,16 @@ def main() -> None:
         "local or OpenAI-compatible LLMs."
     )
 
+    thought_section = st.container()
+    with thought_section:
+        st.subheader("Current Thought Stream")
+        thought_placeholder = st.empty()
+        current_thought = st.session_state.get("current_thought_stream")
+        if current_thought:
+            thought_placeholder.markdown(current_thought)
+        else:
+            thought_placeholder.caption("No active thoughts. Send a message to see the persona think.")
+
     conversation_placeholder = st.container()
     thought_placeholder = None
     pending_prompt = st.session_state.pop("pending_user_message", None)

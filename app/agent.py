@@ -216,6 +216,7 @@ class PersonaAgent:
         last_reply = ""
         thinking_emitted = False
         final_thinking_snapshot = ""
+
         for chunk in self.llm.stream_complete(messages, max_tokens=600):
             if not chunk:
                 continue
@@ -226,6 +227,7 @@ class PersonaAgent:
                 if snapshot != last_thinking:
                     last_thinking = snapshot
                     final_thinking_snapshot = snapshot
+
                     thinking_emitted = True
                     yield {"type": "thinking", "content": snapshot}
             reply_body, _ = self._extract_tag_snapshot(buffer, "reply")
