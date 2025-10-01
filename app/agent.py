@@ -75,7 +75,9 @@ class PersonaAgent:
         instructions = (
             f"You are {self.persona.name}. Reply in the first person, stay grounded in the persona's "
             "voice, and keep continuity with the ongoing chat. Narrate any internal thinking in the "
-            "first person as well, and let your answer feel considered and empathetic."
+            "first person as well, and let your answer feel considered and empathetic. It is "
+            "mandatory to include a brief first-person inner monologue before every reply so the "
+            "user can follow your live reasoning."
         )
         guidance: List[dict[str, str]] = [{"role": "system", "content": instructions}]
         if context_snippets:
@@ -91,7 +93,8 @@ class PersonaAgent:
                 "role": "system",
                 "content": (
                     "Respond using XML tags exactly in this order:\n"
-                    "<thinking>First-person inner monologue, 1-2 sentences.</thinking>\n"
+                    "<thinking>First-person inner monologue, 1-2 sentences. Always speak as 'I'."\
+                    "</thinking>\n"
                     "<reply>Your spoken reply to the user, in the persona's voice.</reply>\n"
                     "<follow_up>First-person reminder that helps with the next turn.</follow_up>"
                 ),
@@ -211,6 +214,7 @@ class PersonaAgent:
         buffer = ""
         last_thinking = ""
         last_reply = ""
+        thinking_emitted = False
         for chunk in self.llm.stream_complete(messages, max_tokens=600):
             if not chunk:
                 continue
@@ -220,6 +224,7 @@ class PersonaAgent:
                 snapshot = thinking.strip()
                 if snapshot != last_thinking:
                     last_thinking = snapshot
+                    thinking_emitted = True
                     yield {"type": "thinking", "content": snapshot}
             reply_body, _ = self._extract_tag_snapshot(buffer, "reply")
             if reply_body is not None:
@@ -229,6 +234,11 @@ class PersonaAgent:
                     yield {"type": "reply", "content": snapshot_reply}
 
         reflection, reply_body, follow_up = self._parse_structured_reply(buffer)
+        if reflection and not thinking_emitted:
+            sanitized_reflection = reflection.strip()
+            if sanitized_reflection:
+                yield {"type": "thinking", "content": sanitized_reflection}
+                thinking_emitted = True
         final_reply = self._sanitize_reply(reply_body.strip())
         if not final_reply:
             final_reply = self._sanitize_reply(buffer.strip())
