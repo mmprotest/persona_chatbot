@@ -205,3 +205,4 @@ class PersonaAgent:
                 suggestion.extra_memories,
                 seed_id=seed_id,
             )
+
