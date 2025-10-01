@@ -25,6 +25,8 @@ class PersonaAgent:
         self.conversation = ConversationBuffer()
         self._initialized = False
         self.persona = persona_config or persona
+        self._last_final_reply: str | None = None
+        self._last_user_message: str | None = None
         if persona_profile is None:
             self.persona_profile = self.persona.generate_profile(self.llm)
         else:
@@ -87,6 +89,8 @@ class PersonaAgent:
                 "content": (
                     "You are refining an assistant response based on reflection notes. Ensure the "
                     "voice matches the persona, and weave in relevant memories when natural."
+                    " Never disclose analysis, planning steps, or inner thoughts—only share the final"
+                    " conversational reply."
                 ),
             },
             {
@@ -100,6 +104,70 @@ class PersonaAgent:
         ]
         improved = self.llm.complete(messages, max_tokens=512)
         return improved
+
+    def _needs_fallback(self, user_message: str, candidate_reply: str) -> bool:
+        reply_clean = candidate_reply.strip()
+        if not reply_clean or self._last_final_reply is None:
+            return False
+        if reply_clean != self._last_final_reply:
+            return False
+        if self._last_user_message is None:
+            return True
+        return user_message.strip() != self._last_user_message.strip()
+
+    def _fallback_reply(self, user_message: str) -> str:
+        persona_name = self.persona.name
+        traits = ", ".join(self.persona_profile.traits[:3])
+        interests = ", ".join(self.persona_profile.interests[:3])
+        biography = self.persona_profile.biography
+        user_summary = user_message.strip()
+        quoted_message = f"“{user_summary}”" if user_summary else ""
+        acknowledgement = (
+            "I want to make sure I'm responding to what you just shared"
+            if user_message
+            else "I'm here and listening"
+        )
+        reply = (
+            f"Hey, it's {persona_name}. {acknowledgement}: "
+            f"{quoted_message}. "
+            "I might have sounded like a broken record a moment ago, so let me reset and engage "
+            "properly. "
+            f"From what you've said, here's what I'm taking away: {user_summary}\n\n"
+            f"I'm someone who's {traits or 'thoughtful and attentive'}, with a life rooted in {biography}. "
+            "Tell me more about how you're feeling or what you'd like me to help with next—"
+            f"I'm especially excited about anything related to {interests or 'the things you care about'}."
+        )
+        return reply.strip()
+
+    def _sanitize_reply(self, reply: str) -> str:
+        """Remove accidental meta-commentary so the user only sees the response."""
+
+        lines: List[str] = []
+        blocked_prefixes = (
+            "analysis:",
+            "thoughts:",
+            "inner thoughts:",
+            "inner monologue:",
+            "plan:",
+            "reflection:",
+            "reasoning:",
+            "assistant's plan:",
+        )
+        for raw_line in reply.splitlines():
+            line = raw_line.strip()
+            if not line:
+                lines.append("")
+                continue
+            lowered = line.lower()
+            if lowered.startswith(blocked_prefixes):
+                continue
+            if lowered.startswith("[thinking") or lowered.startswith("(thinking"):
+                continue
+            lines.append(raw_line)
+        sanitized = "\n".join(lines).strip()
+        if sanitized:
+            return sanitized
+        return reply.strip()
 
     def generate_response(self, user_message: str) -> Dict[str, str]:
         user_message_clean = user_message.strip()
@@ -135,11 +203,27 @@ class PersonaAgent:
                 ),
             }
         )
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Stay fully in character. Share only the final response—never your planning, "
+                    "analysis, or meta-commentary."
+                ),
+            }
+        )
         draft = self.llm.complete(messages, max_tokens=800)
         reflection = self._generate_reflection(user_message, draft)
         reflection_clean = reflection.strip()
         improved = self._apply_reflection(reflection, draft)
         final_reply = improved.strip()
+        fallback_used = False
+        final_reply = self._sanitize_reply(final_reply)
+        if self._needs_fallback(user_message, final_reply):
+            fallback_used = True
+            final_reply = self._fallback_reply(user_message)
+            improved = final_reply
+        final_reply = self._sanitize_reply(final_reply)
         if not final_reply:
             draft_clean = draft.strip()
             if draft_clean:
@@ -151,7 +235,9 @@ class PersonaAgent:
                 )
         assistant_turn = self.conversation.add("assistant", final_reply)
         assistant_turn.id = long_term.add_memory(
-            "assistant", final_reply, metadata={"type": "message"}
+            "assistant",
+            final_reply,
+            metadata={"type": "message", "fallback_used": fallback_used},
         )
         if reflection_clean:
             long_term.add_memory(
@@ -159,7 +245,7 @@ class PersonaAgent:
                 reflection_clean,
                 metadata={"type": "reflection", "source": "self"},
             )
-        plan = self._forecast_next_steps(user_message, improved)
+        plan = self._forecast_next_steps(user_message, final_reply)
         if plan.strip():
             long_term.add_memory(
                 "assistant_plan",
@@ -169,9 +255,11 @@ class PersonaAgent:
                     "seed_id": self.persona_profile.seed_id,
                 },
             )
+        self._last_final_reply = final_reply
+        self._last_user_message = user_message
         return {
             "draft": draft,
-            "final": improved,
+            "final": final_reply,
             "reflection": reflection,
             "context": context_prompt,
             "plan": plan,
