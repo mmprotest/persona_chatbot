@@ -52,8 +52,12 @@ class PersonaAgent:
 
     def ingest_user_message(self, content: str) -> None:
         self._ensure_session()
-        turn = self.conversation.add("user", content)
-        turn.id = long_term.add_memory("user", content, metadata={"type": "message"})
+        message = content.strip()
+        if not message:
+            _LOGGER.debug("Skipping empty user message ingestion")
+            return
+        turn = self.conversation.add("user", message)
+        turn.id = long_term.add_memory("user", message, metadata={"type": "message"})
 
     def _build_contextual_prompt(self, user_message: str) -> str:
         memories = long_term.search_memories(user_message)
@@ -98,8 +102,26 @@ class PersonaAgent:
         return improved
 
     def generate_response(self, user_message: str) -> Dict[str, str]:
-        self.ingest_user_message(user_message)
-        user_message = user_message.strip()
+        user_message_clean = user_message.strip()
+        if not user_message_clean:
+            self._ensure_session()
+            fallback_reply = (
+                "It seems you didn't type a message. Could you share what you'd like to talk about?"
+            )
+            assistant_turn = self.conversation.add("assistant", fallback_reply)
+            assistant_turn.id = long_term.add_memory(
+                "assistant", fallback_reply, metadata={"type": "message", "auto_generated": True}
+            )
+            return {
+                "draft": fallback_reply,
+                "final": fallback_reply,
+                "reflection": "",
+                "context": "",
+                "plan": "",
+            }
+
+        self.ingest_user_message(user_message_clean)
+        user_message = user_message_clean
         context_prompt = self._build_contextual_prompt(user_message)
         messages: List[dict[str, str]] = list(self.conversation.to_messages())
         if context_prompt:
@@ -117,8 +139,20 @@ class PersonaAgent:
         reflection = self._generate_reflection(user_message, draft)
         reflection_clean = reflection.strip()
         improved = self._apply_reflection(reflection, draft)
-        assistant_turn = self.conversation.add("assistant", improved)
-        assistant_turn.id = long_term.add_memory("assistant", improved, metadata={"type": "message"})
+        final_reply = improved.strip()
+        if not final_reply:
+            draft_clean = draft.strip()
+            if draft_clean:
+                final_reply = draft_clean
+            else:
+                final_reply = (
+                    "I'm sorry, but I'm having trouble generating a reply right now. "
+                    "Could you please restate your question?"
+                )
+        assistant_turn = self.conversation.add("assistant", final_reply)
+        assistant_turn.id = long_term.add_memory(
+            "assistant", final_reply, metadata={"type": "message"}
+        )
         if reflection_clean:
             long_term.add_memory(
                 "assistant_reflection",
