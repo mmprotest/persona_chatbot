@@ -1,8 +1,7 @@
-"""Persistent long-term memory backed by SQLite with vector search."""
+"""SQLite-backed long-term memory store."""
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -27,17 +26,17 @@ CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at DESC);
 """
 
 
-def _ensure_database(path: str) -> None:
-    Path(os.path.dirname(path) or ".").mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as conn:
+def _ensure_database(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(str(path)) as conn:
         conn.executescript(_DB_SCHEMA)
 
 
 @contextmanager
 def _connect() -> Iterable[sqlite3.Connection]:
-    db_path = config.memory.database_path
+    db_path = Path(config.memory.database_path)
     _ensure_database(db_path)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(str(db_path))
     try:
         yield conn
     finally:
@@ -152,3 +151,4 @@ def has_seed(seed_id: str) -> bool:
             (pattern,),
         ).fetchone()
     return row is not None
+
