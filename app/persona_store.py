@@ -155,3 +155,12 @@ def find_persona_by_name(name: str) -> Optional[dict[str, object]]:
         "updated_at": float(row[8]),
     }
 
+
+def delete_persona(persona_id: int) -> bool:
+    """Delete the specified persona record."""
+
+    with _connect() as conn:
+        cursor = conn.execute("DELETE FROM personas WHERE id = ?", (persona_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+

@@ -211,48 +211,17 @@ class PersonaAgent:
                 messages.extend(runtime_guidance)
             messages.append({"role": turn.role, "content": turn.content})
 
-        buffer = ""
-        last_thinking = ""
-        last_reply = ""
-        thinking_emitted = False
-        final_thinking_snapshot = ""
-
-        for chunk in self.llm.stream_complete(messages, max_tokens=600):
-            if not chunk:
-                continue
-            buffer += chunk
-            thinking, _ = self._extract_tag_snapshot(buffer, "thinking")
-            if thinking is not None:
-                snapshot = thinking.strip()
-                if snapshot != last_thinking:
-                    last_thinking = snapshot
-                    final_thinking_snapshot = snapshot
-
-                    thinking_emitted = True
-                    yield {"type": "thinking", "content": snapshot}
-            reply_body, _ = self._extract_tag_snapshot(buffer, "reply")
-            if reply_body is not None:
-                snapshot_reply = self._sanitize_reply(reply_body.strip())
-                if snapshot_reply != last_reply:
-                    last_reply = snapshot_reply
-                    yield {"type": "reply", "content": snapshot_reply}
-
-        reflection, reply_body, follow_up = self._parse_structured_reply(buffer)
-        final_thinking = reflection.strip() if reflection else ""
-        if not final_thinking:
-            final_thinking = final_thinking_snapshot.strip()
-        if final_thinking:
-            if not thinking_emitted or final_thinking != last_thinking.strip():
-                final_thinking_snapshot = final_thinking
-                yield {"type": "thinking", "content": final_thinking}
-                thinking_emitted = True
+        raw_response = self.llm.complete(messages, max_tokens=600)
+        reflection, reply_body, follow_up = self._parse_structured_reply(raw_response)
         final_reply = self._sanitize_reply(reply_body.strip())
         if not final_reply:
-            final_reply = self._sanitize_reply(buffer.strip())
+            final_reply = self._sanitize_reply(raw_response.strip())
+
         assistant_turn = self.conversation.add("assistant", final_reply)
         assistant_turn.id = long_term.add_memory(
             "assistant", final_reply, metadata={"type": "message"}
         )
+
         context_summary = self._format_context_summary(context_snippets)
         plan = follow_up.strip()
         if plan:
@@ -264,16 +233,14 @@ class PersonaAgent:
                     "seed_id": self.persona_profile.seed_id,
                 },
             )
-        yield {
-            "type": "complete",
-            "result": {
-                "draft": final_reply,
-                "final": final_reply,
-                "reflection": reflection,
-                "thinking": final_thinking_snapshot.strip(),
-                "context": context_summary,
-                "plan": plan,
-            },
+
+        return {
+            "draft": final_reply,
+            "final": final_reply,
+            "reflection": reflection,
+            "thinking": reflection.strip(),
+            "context": context_summary,
+            "plan": plan,
         }
 
     def generate_response(self, user_message: str) -> Dict[str, str]:
