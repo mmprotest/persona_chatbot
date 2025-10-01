@@ -11,6 +11,7 @@ A fully fledged persona-driven AI companion built with Python and Streamlit. The
 - **Self-reflection loop** – Each response is drafted, reviewed, and refined for authenticity.
 - **Editable chat history** – Modify both user and assistant messages directly within the Streamlit UI.
 - **Memory browser** – Inspect the most recent stored memories and reflections from the sidebar.
+- **Persona library** – Generate brand-new personas from the UI, browse everything you've saved, and swap characters instantly.
 
 ## Getting Started
 
@@ -58,7 +59,14 @@ streamlit run streamlit_app.py
 
 Interact with the chatbot through the chat input. Each exchange is automatically reflected upon, refined, and stored. Use the sidebar to reset the conversation or review recent memories.
 
-The sidebar reveals the generated persona dossier so you can see the assistant's biography, traits, and daily rhythm at a glance. Use the **Suggest persona adjustments** box to describe tweaks you'd like to make—the agent rewrites its backstory, reseeds long-term memory, and updates the active system prompt immediately. After each turn you'll also find the agent's self-reflection notes, the retrieved context, and a forward-looking relationship plan.
+The sidebar now doubles as a persona studio:
+
+- **Persona Library** – Choose the active character from any persona you've generated. Everything lives in the same SQLite database, so switching personas is instant.
+- **Create a new persona** – Fill out a quick form with a name, description, and conversational goals. The agent spins up a full biography, relationships, and memories on the spot and saves it for reuse.
+- **Browse saved personas** – Expand the library to skim every persona's summary, goals, and last-updated timestamp.
+- **Suggest persona adjustments** – Describe tweaks you'd like to make. The agent rewrites its backstory, reseeds long-term memory, and updates the active system prompt immediately.
+
+After each turn you'll also find the agent's self-reflection notes, the retrieved context, and a forward-looking relationship plan.
 
 ### Using Ollama
 
@@ -72,7 +80,7 @@ streamlit run streamlit_app.py
 
 ### Data Storage
 
-Long-term memories are saved in a SQLite database specified by `MEMORY_DB_PATH`. Each entry includes the role, content, metadata, and embedding for similarity search.
+Long-term memories are saved in a SQLite database specified by `MEMORY_DB_PATH`. Each entry includes the role, content, metadata, and embedding for similarity search. The same database now stores persona blueprints (name, goals, full profile JSON, and timestamps) so your library of characters travels with the conversation history.
 
 ## Development Notes
 

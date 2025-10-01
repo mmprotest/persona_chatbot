@@ -7,7 +7,8 @@ from typing import Dict, List
 from .llm.factory import create_llm_client
 from .memory import long_term
 from .memory.conversation import ConversationBuffer, ConversationTurn
-from .persona import PersonaProfile, persona
+from .persona import Persona, PersonaProfile, persona
+from .persona_store import upsert_persona
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -15,17 +16,26 @@ _LOGGER = logging.getLogger(__name__)
 class PersonaAgent:
     """Agent that blends persona adherence with adaptive reasoning."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        persona_config: Persona | None = None,
+        persona_profile: PersonaProfile | None = None,
+    ) -> None:
         self.llm = create_llm_client()
         self.conversation = ConversationBuffer()
         self._initialized = False
-        self.persona_profile: PersonaProfile = persona.generate_profile(self.llm)
+        self.persona = persona_config or persona
+        if persona_profile is None:
+            self.persona_profile = self.persona.generate_profile(self.llm)
+        else:
+            self.persona_profile = persona_profile
+        self.persona_record_id = upsert_persona(self.persona, self.persona_profile)
         self._seed_persona_profile()
 
     def _ensure_session(self) -> None:
         if self._initialized:
             return
-        system_prompt = persona.build_system_prompt(self.persona_profile)
+        system_prompt = self.persona.build_system_prompt(self.persona_profile)
         self.conversation.add("system", system_prompt, editable=False)
         self._initialized = True
         _LOGGER.debug("Initialized conversation with system prompt")
@@ -166,14 +176,15 @@ class PersonaAgent:
         if not suggestion:
             return self.persona_profile
 
-        updated_profile = persona.adjust_profile(self.llm, self.persona_profile, suggestion)
+        updated_profile = self.persona.adjust_profile(self.llm, self.persona_profile, suggestion)
         if not isinstance(updated_profile, PersonaProfile):
             return self.persona_profile
 
         self.persona_profile = updated_profile
+        self.persona_record_id = upsert_persona(self.persona, self.persona_profile)
 
         if self._initialized and self.conversation.turns:
-            new_prompt = persona.build_system_prompt(self.persona_profile)
+            new_prompt = self.persona.build_system_prompt(self.persona_profile)
             first_turn = self.conversation.turns[0]
             if first_turn.role == "system":
                 self.conversation.update(0, new_prompt)
@@ -205,5 +216,8 @@ class PersonaAgent:
         return self.persona_profile
 
 
-def create_agent() -> PersonaAgent:
-    return PersonaAgent()
+def create_agent(
+    persona_config: Persona | None = None,
+    persona_profile: PersonaProfile | None = None,
+) -> PersonaAgent:
+    return PersonaAgent(persona_config=persona_config, persona_profile=persona_profile)

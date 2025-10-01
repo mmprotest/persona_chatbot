@@ -2,18 +2,69 @@
 from __future__ import annotations
 
 import time
+from typing import Optional
 
 import streamlit as st
 
 from app.agent import create_agent
+from app.persona import Persona, PersonaProfile, persona as default_persona
+from app.persona_store import (
+    find_persona_by_name,
+    list_personas,
+    load_persona,
+)
 
 
 st.set_page_config(page_title="Persona Chatbot", page_icon="🧠", layout="wide")
 
 
+def _hydrate_persona(record: dict[str, object]) -> tuple[Persona, PersonaProfile]:
+    persona_config = Persona(
+        name=str(record.get("name", "")),
+        description=str(record.get("description", "")),
+        goals=str(record.get("goals", "")),
+        seed_prompt=str(record.get("seed_prompt", "")),
+    )
+    profile_payload = record.get("profile") if isinstance(record.get("profile"), dict) else {}
+    profile = PersonaProfile.from_saved(profile_payload or {}, seed_id=str(record.get("seed_id", "")))
+    return persona_config, profile
+
+
+def _set_agent(agent) -> None:
+    st.session_state.agent = agent
+    st.session_state.active_persona_id = getattr(agent, "persona_record_id", None)
+    if "editing" not in st.session_state:
+        st.session_state.editing = {}
+    else:
+        st.session_state.editing.clear()
+    st.session_state.last_generation = None
+
+
+def set_active_persona(persona_id: int) -> None:
+    record = load_persona(persona_id)
+    if not record:
+        st.warning("Unable to load the selected persona.")
+        return
+    persona_config, profile = _hydrate_persona(record)
+    agent = create_agent(persona_config=persona_config, persona_profile=profile)
+    _set_agent(agent)
+    st.experimental_rerun()
+
+
 def get_agent():
     if "agent" not in st.session_state:
-        st.session_state.agent = create_agent()
+        active_id = st.session_state.get("active_persona_id")
+        record: Optional[dict[str, object]] = None
+        if active_id is not None:
+            record = load_persona(int(active_id))
+        if record is None:
+            record = find_persona_by_name(default_persona.name)
+        if record:
+            persona_config, profile = _hydrate_persona(record)
+            agent = create_agent(persona_config=persona_config, persona_profile=profile)
+        else:
+            agent = create_agent()
+        _set_agent(agent)
     if "editing" not in st.session_state:
         st.session_state.editing = {}
     if "last_generation" not in st.session_state:
@@ -23,6 +74,13 @@ def get_agent():
 
 def toggle_edit(index: int, value: bool) -> None:
     st.session_state.editing[index] = value
+
+
+def _format_timestamp(ts: float) -> str:
+    try:
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
+    except Exception:  # pragma: no cover - fallback for malformed timestamps
+        return "Unknown"
 
 
 def handle_edit(index: int, turn_content: str) -> None:
@@ -42,6 +100,83 @@ def render_sidebar() -> None:
             if "editing" in st.session_state:
                 st.session_state.editing.clear()
             st.experimental_rerun()
+        st.divider()
+        st.subheader("Persona Library")
+        personas = list_personas()
+        persona_options = [record["id"] for record in personas]
+        current_id = st.session_state.get("active_persona_id")
+        try:
+            current_id = int(current_id) if current_id is not None else None
+        except (TypeError, ValueError):  # pragma: no cover - defensive parsing
+            current_id = None
+        if persona_options:
+            try:
+                index = persona_options.index(current_id) if current_id in persona_options else 0
+            except ValueError:
+                index = 0
+            selected_id = st.selectbox(
+                "Active persona",
+                persona_options,
+                index=index,
+                format_func=lambda pid: next(
+                    (f"{item['name']} — {item['description']}" for item in personas if item["id"] == pid),
+                    str(pid),
+                ),
+                key="persona_selector",
+            )
+            if selected_id != current_id:
+                set_active_persona(int(selected_id))
+        else:
+            st.info("No personas saved yet. Create one below to get started.")
+
+        with st.expander("Create a new persona", expanded=not persona_options):
+            with st.form("create_persona_form"):
+                new_name = st.text_input("Name", help="How should this persona introduce themselves?")
+                new_description = st.text_area(
+                    "Description",
+                    help="Give a quick character sketch so the agent knows the persona's vibe.",
+                    height=80,
+                )
+                new_goals = st.text_area(
+                    "Goals",
+                    help="Describe what the persona prioritizes during conversations.",
+                    height=80,
+                )
+                new_seed = st.text_area(
+                    "Optional inspiration",
+                    help="Add any extra flavor, like backstory beats or quirks.",
+                    height=80,
+                )
+                create_submitted = st.form_submit_button("Generate Persona", use_container_width=True)
+            if create_submitted:
+                if not new_name.strip() or not new_description.strip() or not new_goals.strip():
+                    st.warning("Name, description, and goals are required to craft a persona.")
+                else:
+                    persona_config = Persona(
+                        name=new_name.strip(),
+                        description=new_description.strip(),
+                        goals=new_goals.strip(),
+                        seed_prompt=new_seed.strip(),
+                    )
+                    new_agent = create_agent(persona_config=persona_config)
+                    _set_agent(new_agent)
+                    st.success(f"Persona '{persona_config.name}' generated and set as active.")
+                    st.experimental_rerun()
+
+        with st.expander("Browse saved personas", expanded=False):
+            if personas:
+                for record in personas:
+                    profile = record.get("profile") or {}
+                    biography = profile.get("biography", "A persona awaiting a story.")
+                    st.markdown(
+                        f"**{record['name']}** — {record['description']}\n\n"
+                        f"Goals: {record['goals']}\n\n"
+                        f"Last updated: {_format_timestamp(record['updated_at'])}\n\n"
+                        f"> {biography}"
+                    )
+                    st.divider()
+            else:
+                st.caption("No personas stored yet. Create one above to start your library.")
         st.divider()
         st.subheader("Persona Profile")
         profile = agent.persona_profile
@@ -74,7 +209,7 @@ def render_sidebar() -> None:
         st.divider()
         st.subheader("Recent Memories")
         for record in agent.load_recent_memories():
-            timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record["created_at"]))
+            timestamp = _format_timestamp(record["created_at"])
             st.markdown(
                 f"**{record['role']}** · {timestamp}\n\n"
                 f"{record['content']}\n\n"

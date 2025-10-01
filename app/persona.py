@@ -56,7 +56,13 @@ class PersonaProfile:
     seed_id: str
 
     @classmethod
-    def from_dict(cls, data: dict[str, object], *, seed_basis: str) -> "PersonaProfile":
+    def from_dict(
+        cls,
+        data: dict[str, object],
+        *,
+        seed_basis: str,
+        seed_id_override: str | None = None,
+    ) -> "PersonaProfile":
         biography = str(data.get("biography", "")).strip()
         traits = _safe_list(data.get("traits"))
         speaking_style = str(data.get("speaking_style", "")).strip()
@@ -124,7 +130,7 @@ class PersonaProfile:
                     ],
                 }
             ]
-        seed_id = hashlib.sha256(seed_basis.encode("utf-8")).hexdigest()
+        seed_id = seed_id_override or hashlib.sha256(seed_basis.encode("utf-8")).hexdigest()
         return cls(
             biography=biography,
             traits=traits,
@@ -137,6 +143,12 @@ class PersonaProfile:
             sample_dialogues=sample_dialogues,
             seed_id=seed_id,
         )
+
+    @classmethod
+    def from_saved(cls, data: dict[str, object], *, seed_id: str) -> "PersonaProfile":
+        """Rehydrate a persona profile from persisted JSON."""
+
+        return cls.from_dict(data, seed_basis=seed_id, seed_id_override=seed_id)
 
     def system_context(self) -> str:
         lines: List[str] = [
