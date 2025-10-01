@@ -195,6 +195,10 @@ def render_sidebar() -> None:
             f"**Interests:** {', '.join(profile.interests)}\n\n"
             f"**Daily rhythm:** {profile.daily_routine}",
         )
+        if st.session_state.get("clear_persona_suggestion_input"):
+            st.session_state.pop("clear_persona_suggestion_input", None)
+            st.session_state.persona_suggestion_input = ""
+
         with st.form("persona_suggestion_form", clear_on_submit=False):
             suggestion = st.text_area(
                 "Suggest persona adjustments",
@@ -209,7 +213,7 @@ def render_sidebar() -> None:
         if submitted:
             if suggestion.strip():
                 agent.apply_persona_suggestion(suggestion)
-                st.session_state.persona_suggestion_input = ""
+                st.session_state.clear_persona_suggestion_input = True
                 st.session_state.last_generation = None
                 _rerun()
             else:
