@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, Iterator, List, Tuple
 
 from .llm.factory import create_llm_client
 from .memory import long_term
@@ -74,8 +74,8 @@ class PersonaAgent:
     def _build_runtime_guidance(self, context_snippets: List[str]) -> List[dict[str, str]]:
         instructions = (
             f"You are {self.persona.name}. Reply in the first person, stay grounded in the persona's "
-            "voice, and keep continuity with the ongoing chat. Think through the user's message "
-            "before speaking, and let your answer feel considered and empathetic."
+            "voice, and keep continuity with the ongoing chat. Narrate any internal thinking in the "
+            "first person as well, and let your answer feel considered and empathetic."
         )
         guidance: List[dict[str, str]] = [{"role": "system", "content": instructions}]
         if context_snippets:
@@ -90,10 +90,10 @@ class PersonaAgent:
             {
                 "role": "system",
                 "content": (
-                    "After considering everything, respond in JSON with keys 'reflection', 'reply', and "
-                    "'follow_up'. The reflection should capture your internal reasoning in 1-2 sentences; "
-                    "reply is what you say to the user; follow_up is a note to yourself about how to keep "
-                    "the next exchange meaningful."
+                    "Respond using XML tags exactly in this order:\n"
+                    "<thinking>First-person inner monologue, 1-2 sentences.</thinking>\n"
+                    "<reply>Your spoken reply to the user, in the persona's voice.</reply>\n"
+                    "<follow_up>First-person reminder that helps with the next turn.</follow_up>"
                 ),
             }
         )
@@ -106,6 +106,25 @@ class PersonaAgent:
 
     def _parse_structured_reply(self, draft: str) -> Tuple[str, str, str]:
         candidate = draft.strip()
+
+        def _extract(tag: str) -> str:
+            open_tag = f"<{tag}>"
+            close_tag = f"</{tag}>"
+            start = candidate.find(open_tag)
+            if start == -1:
+                return ""
+            start += len(open_tag)
+            end = candidate.find(close_tag, start)
+            if end == -1:
+                return candidate[start:].strip()
+            return candidate[start:end].strip()
+
+        if "<reply>" in candidate:
+            reflection = _extract("thinking")
+            reply = _extract("reply")
+            follow_up = _extract("follow_up")
+            return reflection, reply, follow_up
+
         start = candidate.find("{")
         end = candidate.rfind("}")
         if start != -1 and end != -1 and start < end:
@@ -118,6 +137,18 @@ class PersonaAgent:
             except (json.JSONDecodeError, TypeError, ValueError):
                 _LOGGER.debug("Failed to parse structured reply", exc_info=True)
         return "", candidate, ""
+
+    def _extract_tag_snapshot(self, payload: str, tag: str) -> Tuple[str | None, bool]:
+        open_tag = f"<{tag}>"
+        close_tag = f"</{tag}>"
+        start = payload.find(open_tag)
+        if start == -1:
+            return None, False
+        start += len(open_tag)
+        end = payload.find(close_tag, start)
+        if end == -1:
+            return payload[start:], False
+        return payload[start:end], True
 
 
     def _sanitize_reply(self, reply: str) -> str:
@@ -151,17 +182,21 @@ class PersonaAgent:
         return reply.strip()
 
 
-    def generate_response(self, user_message: str) -> Dict[str, str]:
+    def stream_response(self, user_message: str) -> Iterator[dict[str, object]]:
         user_message_clean = user_message.strip()
         if not user_message_clean:
             self._ensure_session()
-            return {
-                "draft": "",
-                "final": "",
-                "reflection": "",
-                "context": "",
-                "plan": "",
+            yield {
+                "type": "complete",
+                "result": {
+                    "draft": "",
+                    "final": "",
+                    "reflection": "",
+                    "context": "",
+                    "plan": "",
+                },
             }
+            return
 
         self.ingest_user_message(user_message_clean)
         context_snippets = self._gather_context_snippets(user_message_clean)
@@ -172,11 +207,31 @@ class PersonaAgent:
             if index == total_turns - 1 and runtime_guidance:
                 messages.extend(runtime_guidance)
             messages.append({"role": turn.role, "content": turn.content})
-        draft = self.llm.complete(messages, max_tokens=600)
-        reflection, reply_body, follow_up = self._parse_structured_reply(draft)
+
+        buffer = ""
+        last_thinking = ""
+        last_reply = ""
+        for chunk in self.llm.stream_complete(messages, max_tokens=600):
+            if not chunk:
+                continue
+            buffer += chunk
+            thinking, _ = self._extract_tag_snapshot(buffer, "thinking")
+            if thinking is not None:
+                snapshot = thinking.strip()
+                if snapshot != last_thinking:
+                    last_thinking = snapshot
+                    yield {"type": "thinking", "content": snapshot}
+            reply_body, _ = self._extract_tag_snapshot(buffer, "reply")
+            if reply_body is not None:
+                snapshot_reply = self._sanitize_reply(reply_body.strip())
+                if snapshot_reply != last_reply:
+                    last_reply = snapshot_reply
+                    yield {"type": "reply", "content": snapshot_reply}
+
+        reflection, reply_body, follow_up = self._parse_structured_reply(buffer)
         final_reply = self._sanitize_reply(reply_body.strip())
         if not final_reply:
-            final_reply = self._sanitize_reply(draft.strip())
+            final_reply = self._sanitize_reply(buffer.strip())
         assistant_turn = self.conversation.add("assistant", final_reply)
         assistant_turn.id = long_term.add_memory(
             "assistant", final_reply, metadata={"type": "message"}
@@ -192,13 +247,33 @@ class PersonaAgent:
                     "seed_id": self.persona_profile.seed_id,
                 },
             )
-        return {
-            "draft": final_reply,
-            "final": final_reply,
-            "reflection": reflection,
-            "context": context_summary,
-            "plan": plan,
+        yield {
+            "type": "complete",
+            "result": {
+                "draft": final_reply,
+                "final": final_reply,
+                "reflection": reflection,
+                "context": context_summary,
+                "plan": plan,
+            },
         }
+
+    def generate_response(self, user_message: str) -> Dict[str, str]:
+        final_result: Dict[str, str] | None = None
+        for event in self.stream_response(user_message):
+            if event.get("type") == "complete":
+                result = event.get("result")
+                if isinstance(result, dict):
+                    final_result = result  # type: ignore[assignment]
+        if final_result is None:
+            return {
+                "draft": "",
+                "final": "",
+                "reflection": "",
+                "context": "",
+                "plan": "",
+            }
+        return final_result
 
     def edit_turn(self, index: int, new_content: str) -> None:
         self.conversation.update(index, new_content)
