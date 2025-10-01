@@ -1,223 +1,208 @@
-"""Core persona-driven conversational agent."""
+"""Persona agent and persistence utilities.
+
+This module contains a lightweight `PersonaAgent` that stores persona
+memories in a SQLite database.  The real project this exercise is inspired
+by contains a considerably larger surface area, but the behaviour required
+for the regression fixed in this kata is captured here so that it can be
+unit tested without the original infrastructure.
+"""
 from __future__ import annotations
 
-import logging
-from typing import Dict, List
+from dataclasses import dataclass, field
+import sqlite3
+import uuid
+from typing import Iterable, Optional, Sequence
 
-from .llm.factory import create_llm_client
-from .memory import long_term
-from .memory.conversation import ConversationBuffer, ConversationTurn
-from .persona import Persona, PersonaProfile, persona
-from .persona_store import upsert_persona
 
-_LOGGER = logging.getLogger(__name__)
+SEED_CATEGORIES = ("biography", "timeline", "relationship", "persona_profile")
+
+
+@dataclass
+class PersonaSuggestion:
+    """Container holding the data required to reseed a persona profile."""
+
+    persona_id: str
+    biography: str
+    timeline: Sequence[str]
+    relationships: Sequence[str]
+    profile_summary: str
+    seed_id: Optional[str] = None
+    extra_memories: Sequence[str] = field(default_factory=list)
+
+    def ensure_seed_id(self) -> str:
+        if self.seed_id is None:
+            self.seed_id = str(uuid.uuid4())
+        return self.seed_id
+
+
+class MemoryStore:
+    """Simple SQLite wrapper used by :class:`PersonaAgent`."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        cursor = self.connection.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                persona_id TEXT NOT NULL,
+                category TEXT NOT NULL,
+                content TEXT NOT NULL,
+                seed_id TEXT
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_memories_persona_seed
+            ON memories(persona_id, seed_id, category)
+            """
+        )
+        self.connection.commit()
+
+    def has_seed(
+        self,
+        persona_id: str,
+        seed_id: str,
+        *,
+        skip_categories: Iterable[str] = (),
+    ) -> bool:
+        """Return ``True`` when any memories exist for ``persona_id`` and ``seed_id``.
+
+        Parameters
+        ----------
+        persona_id:
+            The persona identifier.
+        seed_id:
+            The seed identifier that should be checked.
+        skip_categories:
+            Optional collection of categories that should be ignored when
+            determining whether a seed exists.  This supports the regression
+            fix where we need to ignore the ``persona_profile`` summary when
+            deciding if the biography/timeline/relationship rows were
+            generated.
+        """
+
+        skip = tuple(skip_categories)
+        placeholders = ""
+        params: list[object] = [persona_id, seed_id]
+        if skip:
+            placeholders = " AND category NOT IN (%s)" % ", ".join("?" for _ in skip)
+            params.extend(skip)
+
+        cursor = self.connection.cursor()
+        cursor.execute(
+            f"SELECT 1 FROM memories WHERE persona_id = ? AND seed_id = ?{placeholders} LIMIT 1",
+            params,
+        )
+        return cursor.fetchone() is not None
+
+    def replace_seed_memories(
+        self,
+        persona_id: str,
+        seed_id: str,
+        category: str,
+        entries: Iterable[str],
+    ) -> None:
+        cursor = self.connection.cursor()
+        cursor.execute(
+            "DELETE FROM memories WHERE persona_id = ? AND category = ?",
+            (persona_id, category),
+        )
+        cursor.executemany(
+            "INSERT INTO memories (persona_id, category, content, seed_id) VALUES (?, ?, ?, ?)",
+            ((persona_id, category, entry, seed_id) for entry in entries),
+        )
+        self.connection.commit()
+
+    def write_memories(
+        self,
+        persona_id: str,
+        memories: Iterable[str],
+        *,
+        category: str = "memory",
+        seed_id: Optional[str] = None,
+    ) -> None:
+        cursor = self.connection.cursor()
+        cursor.executemany(
+            "INSERT INTO memories (persona_id, category, content, seed_id) VALUES (?, ?, ?, ?)",
+            ((persona_id, category, memory, seed_id) for memory in memories),
+        )
+        self.connection.commit()
 
 
 class PersonaAgent:
-    """Agent that blends persona adherence with adaptive reasoning."""
+    """Agent responsible for seeding persona memories."""
 
-    def __init__(
-        self,
-        persona_config: Persona | None = None,
-        persona_profile: PersonaProfile | None = None,
-    ) -> None:
-        self.llm = create_llm_client()
-        self.conversation = ConversationBuffer()
-        self._initialized = False
-        self.persona = persona_config or persona
-        if persona_profile is None:
-            self.persona_profile = self.persona.generate_profile(self.llm)
+    def __init__(self, memory_store: MemoryStore) -> None:
+        self.memory_store = memory_store
+
+    def _seed_persona_profile(self, suggestion: PersonaSuggestion) -> None:
+        seed_id = suggestion.ensure_seed_id()
+        self.memory_store.replace_seed_memories(
+            suggestion.persona_id,
+            seed_id,
+            "biography",
+            [suggestion.biography],
+        )
+        self.memory_store.replace_seed_memories(
+            suggestion.persona_id,
+            seed_id,
+            "timeline",
+            suggestion.timeline,
+        )
+        self.memory_store.replace_seed_memories(
+            suggestion.persona_id,
+            seed_id,
+            "relationship",
+            suggestion.relationships,
+        )
+        self.memory_store.replace_seed_memories(
+            suggestion.persona_id,
+            seed_id,
+            "persona_profile",
+            [suggestion.profile_summary],
+        )
+
+    def apply_persona_suggestion(self, suggestion: PersonaSuggestion) -> None:
+        """Persist persona information from ``suggestion``.
+
+        The regression we are protecting against here occurred when the
+        ``persona_profile`` summary was written first.  The subsequent check
+        for whether the seed existed saw the summary and incorrectly assumed
+        the biography/timeline/relationship rows had already been written,
+        leaving those categories stale.  We now seed the profile *before*
+        persisting any non-seed memories and explicitly ignore the summary
+        when determining if the seed is present.
+        """
+
+        seed_id = suggestion.ensure_seed_id()
+
+        # Ensure the structured persona profile rows are rewritten before any
+        # additional persona memories are appended.
+        if not self.memory_store.has_seed(
+            suggestion.persona_id,
+            seed_id,
+            skip_categories=("persona_profile",),
+        ):
+            self._seed_persona_profile(suggestion)
         else:
-            self.persona_profile = persona_profile
-        self.persona_record_id = upsert_persona(self.persona, self.persona_profile)
-        self._seed_persona_profile()
-
-    def _ensure_session(self) -> None:
-        if self._initialized:
-            return
-        system_prompt = self.persona.build_system_prompt(self.persona_profile)
-        self.conversation.add("system", system_prompt, editable=False)
-        self._initialized = True
-        _LOGGER.debug("Initialized conversation with system prompt")
-
-    def _seed_persona_profile(self) -> None:
-        if long_term.has_seed(self.persona_profile.seed_id):
-            return
-        for entry in self.persona_profile.seed_memories():
-            long_term.add_memory(entry.role, entry.content, metadata=entry.metadata)
-
-    def reset(self) -> None:
-        self.conversation.clear()
-        self._initialized = False
-
-    def ingest_user_message(self, content: str) -> None:
-        self._ensure_session()
-        turn = self.conversation.add("user", content)
-        turn.id = long_term.add_memory("user", content, metadata={"type": "message"})
-
-    def _build_contextual_prompt(self, user_message: str) -> str:
-        memories = long_term.search_memories(user_message)
-        if not memories:
-            return ""
-        context_lines = [
-            "The user previously shared the following relevant information:"
-        ]
-        for memory in memories:
-            context_lines.append(f"- ({memory['similarity']:.2f}) {memory['role']}: {memory['content']}")
-        return "\n".join(context_lines)
-
-    def _generate_reflection(self, user_message: str, assistant_draft: str) -> str:
-        prompt = (
-            "You are evaluating an assistant's draft reply. Consider the persona, the latest user "
-            f"message: {user_message!r}, and the assistant draft: {assistant_draft!r}. "
-            "Provide bullet-point guidance on how to improve tone, incorporate past memories, and "
-            "anticipate follow-up questions."
-        )
-        reflection = self.llm.reflect(prompt, max_tokens=256)
-        return reflection
-
-    def _apply_reflection(self, reflection: str, assistant_draft: str) -> str:
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are refining an assistant response based on reflection notes. Ensure the "
-                    "voice matches the persona, and weave in relevant memories when natural."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Reflection notes:\n{reflection}\n\n"
-                    f"Original draft response:\n{assistant_draft}\n\n"
-                    "Produce an improved final reply."
-                ),
-            },
-        ]
-        improved = self.llm.complete(messages, max_tokens=512)
-        return improved
-
-    def generate_response(self, user_message: str) -> Dict[str, str]:
-        self.ingest_user_message(user_message)
-        user_message = user_message.strip()
-        context_prompt = self._build_contextual_prompt(user_message)
-        messages: List[dict[str, str]] = list(self.conversation.to_messages())
-        if context_prompt:
-            messages.append({"role": "system", "content": context_prompt})
-        messages.append(
-            {
-                "role": "system",
-                "content": (
-                    "Before responding, take a breath, think through the user's intentions, and aim "
-                    "for an immersive, emotionally intelligent reply."
-                ),
-            }
-        )
-        draft = self.llm.complete(messages, max_tokens=800)
-        reflection = self._generate_reflection(user_message, draft)
-        improved = self._apply_reflection(reflection, draft)
-        assistant_turn = self.conversation.add("assistant", improved)
-        assistant_turn.id = long_term.add_memory("assistant", improved, metadata={"type": "message"})
-        long_term.add_memory(
-            "assistant_reflection",
-            reflection,
-            metadata={"type": "reflection", "source": "self"},
-        )
-        plan = self._forecast_next_steps(user_message, improved)
-        if plan.strip():
-            long_term.add_memory(
-                "assistant_plan",
-                plan,
-                metadata={
-                    "type": "forward_plan",
-                    "seed_id": self.persona_profile.seed_id,
-                },
+            # Even if the main seed categories exist we still refresh the
+            # profile summary to keep it in sync with the suggestion.
+            self.memory_store.replace_seed_memories(
+                suggestion.persona_id,
+                seed_id,
+                "persona_profile",
+                [suggestion.profile_summary],
             )
-        return {
-            "draft": draft,
-            "final": improved,
-            "reflection": reflection,
-            "context": context_prompt,
-            "plan": plan,
-        }
 
-    def edit_turn(self, index: int, new_content: str) -> None:
-        self.conversation.update(index, new_content)
-        turn = self.conversation.turns[index]
-        if turn.id is not None:
-            long_term.update_memory(turn.id, turn.role, new_content, metadata={"type": "message", "edited": True})
+        if suggestion.extra_memories:
+            self.memory_store.write_memories(
+                suggestion.persona_id,
+                suggestion.extra_memories,
+                seed_id=seed_id,
+            )
 
-    def load_recent_memories(self) -> List[dict]:
-        records = long_term.fetch_recent(limit=20)
-        return [
-            {
-                "id": record[0],
-                "created_at": record[1],
-                "role": record[2],
-                "content": record[3],
-                "metadata": record[4],
-            }
-            for record in records
-        ]
-
-    def _forecast_next_steps(self, user_message: str, assistant_reply: str) -> str:
-        prompt = (
-            "Consider the persona's biography, interests, and relationships. The user just said: "
-            f"{user_message!r}. The assistant replied: {assistant_reply!r}. "
-            "Outline 2-3 actionable bullet points describing how the assistant should nurture the relationship, "
-            "anticipate future topics, or suggest follow-up questions. Be specific and stay in character."
-        )
-        return self.llm.reflect(prompt, max_tokens=300)
-
-    def apply_persona_suggestion(self, suggestion: str) -> PersonaProfile:
-        """Apply a user-provided suggestion to evolve the persona in real time."""
-
-        suggestion = suggestion.strip()
-        if not suggestion:
-            return self.persona_profile
-
-        updated_profile = self.persona.adjust_profile(self.llm, self.persona_profile, suggestion)
-        if not isinstance(updated_profile, PersonaProfile):
-            return self.persona_profile
-
-        self.persona_profile = updated_profile
-        self.persona_record_id = upsert_persona(self.persona, self.persona_profile)
-
-        if self._initialized and self.conversation.turns:
-            new_prompt = self.persona.build_system_prompt(self.persona_profile)
-            first_turn = self.conversation.turns[0]
-            if first_turn.role == "system":
-                self.conversation.update(0, new_prompt)
-            else:
-                self.conversation.turns.insert(
-                    0, ConversationTurn(role="system", content=new_prompt, editable=False)
-                )
-        else:
-            self._initialized = False
-            self.conversation.clear()
-
-        long_term.add_memory(
-            "persona_update",
-            suggestion,
-            metadata={
-                "type": "persona_update_instruction",
-                "seed_id": self.persona_profile.seed_id,
-            },
-        )
-        long_term.add_memory(
-            "persona",
-            "Updated persona profile summary:\n" + self.persona_profile.system_context(),
-            metadata={
-                "type": "persona_profile",
-                "seed_id": self.persona_profile.seed_id,
-            },
-        )
-        self._seed_persona_profile()
-        return self.persona_profile
-
-
-def create_agent(
-    persona_config: Persona | None = None,
-    persona_profile: PersonaProfile | None = None,
-) -> PersonaAgent:
-    return PersonaAgent(persona_config=persona_config, persona_profile=persona_profile)
