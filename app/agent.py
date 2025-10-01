@@ -25,6 +25,8 @@ class PersonaAgent:
         self.llm = create_llm_client()
         self.conversation = ConversationBuffer()
         self._initialized = False
+        self._scenario_prompt: str = ""
+        self._scenario_turn_index: int | None = None
         self.persona = persona_config or persona
         if persona_profile is None:
             self.persona_profile = self.persona.generate_profile(self.llm)
@@ -39,6 +41,9 @@ class PersonaAgent:
         system_prompt = self.persona.build_system_prompt(self.persona_profile)
         self.conversation.add("system", system_prompt, editable=False)
         self._initialized = True
+        self._scenario_turn_index = None
+        if self._scenario_prompt:
+            self._apply_scenario_prompt()
         _LOGGER.debug("Initialized conversation with system prompt")
 
     def _seed_persona_profile(self) -> None:
@@ -50,6 +55,7 @@ class PersonaAgent:
     def reset(self) -> None:
         self.conversation.clear()
         self._initialized = False
+        self._scenario_turn_index = None
 
     def ingest_user_message(self, content: str) -> None:
         self._ensure_session()
@@ -74,8 +80,10 @@ class PersonaAgent:
     def _build_runtime_guidance(self, context_snippets: List[str]) -> List[dict[str, str]]:
         instructions = (
             f"You are {self.persona.name}. Reply in the first person, stay grounded in the persona's "
-            "voice, and keep continuity with the ongoing chat. Think through the user's message "
-            "before speaking, and let your answer feel considered and empathetic."
+            "voice, and keep continuity with the ongoing chat. Narrate any internal thinking in the "
+            "first person as well, and let your answer feel considered and empathetic. It is "
+            "mandatory to include a brief first-person inner monologue before every reply so the "
+            "user can follow your live reasoning."
         )
         guidance: List[dict[str, str]] = [{"role": "system", "content": instructions}]
         if context_snippets:
@@ -90,10 +98,11 @@ class PersonaAgent:
             {
                 "role": "system",
                 "content": (
-                    "After considering everything, respond in JSON with keys 'reflection', 'reply', and "
-                    "'follow_up'. The reflection should capture your internal reasoning in 1-2 sentences; "
-                    "reply is what you say to the user; follow_up is a note to yourself about how to keep "
-                    "the next exchange meaningful."
+                    "Respond using XML tags exactly in this order:\n"
+                    "<thinking>First-person inner monologue, 1-2 sentences. Always speak as 'I'."\
+                    "</thinking>\n"
+                    "<reply>Your spoken reply to the user, in the persona's voice.</reply>\n"
+                    "<follow_up>First-person reminder that helps with the next turn.</follow_up>"
                 ),
             }
         )
@@ -106,6 +115,25 @@ class PersonaAgent:
 
     def _parse_structured_reply(self, draft: str) -> Tuple[str, str, str]:
         candidate = draft.strip()
+
+        def _extract(tag: str) -> str:
+            open_tag = f"<{tag}>"
+            close_tag = f"</{tag}>"
+            start = candidate.find(open_tag)
+            if start == -1:
+                return ""
+            start += len(open_tag)
+            end = candidate.find(close_tag, start)
+            if end == -1:
+                return candidate[start:].strip()
+            return candidate[start:end].strip()
+
+        if "<reply>" in candidate:
+            reflection = _extract("thinking")
+            reply = _extract("reply")
+            follow_up = _extract("follow_up")
+            return reflection, reply, follow_up
+
         start = candidate.find("{")
         end = candidate.rfind("}")
         if start != -1 and end != -1 and start < end:
@@ -118,6 +146,18 @@ class PersonaAgent:
             except (json.JSONDecodeError, TypeError, ValueError):
                 _LOGGER.debug("Failed to parse structured reply", exc_info=True)
         return "", candidate, ""
+
+    def _extract_tag_snapshot(self, payload: str, tag: str) -> Tuple[str | None, bool]:
+        open_tag = f"<{tag}>"
+        close_tag = f"</{tag}>"
+        start = payload.find(open_tag)
+        if start == -1:
+            return None, False
+        start += len(open_tag)
+        end = payload.find(close_tag, start)
+        if end == -1:
+            return payload[start:], False
+        return payload[start:end], True
 
 
     def _sanitize_reply(self, reply: str) -> str:
@@ -151,7 +191,52 @@ class PersonaAgent:
         return reply.strip()
 
 
-    def generate_response(self, user_message: str) -> Dict[str, str]:
+    def set_scenario_prompt(self, scenario_prompt: str) -> None:
+        """Update the active scenario context for the conversation."""
+
+        normalized = scenario_prompt.strip()
+        if normalized == self._scenario_prompt:
+            return
+
+        self._scenario_prompt = normalized
+        if self._initialized:
+            self._apply_scenario_prompt()
+        else:
+            self._scenario_turn_index = None
+
+    def _apply_scenario_prompt(self) -> None:
+        """Ensure the scenario context is represented in the conversation history."""
+
+        scenario = self._scenario_prompt.strip()
+
+        if not self._initialized:
+            if not scenario:
+                self._scenario_turn_index = None
+            return
+
+        if not scenario:
+            if self._scenario_turn_index is not None and 0 <= self._scenario_turn_index < len(
+                self.conversation.turns
+            ):
+                self.conversation.turns.pop(self._scenario_turn_index)
+            self._scenario_turn_index = None
+            return
+
+        content = f"Scenario context: {scenario}"
+        if self._scenario_turn_index is not None and 0 <= self._scenario_turn_index < len(
+            self.conversation.turns
+        ):
+            self.conversation.update(self._scenario_turn_index, content)
+            return
+
+        insert_at = 1 if self.conversation.turns and self.conversation.turns[0].role == "system" else 0
+        self.conversation.turns.insert(
+            insert_at,
+            ConversationTurn(role="system", content=content, editable=False),
+        )
+        self._scenario_turn_index = insert_at
+
+    def generate_response(self, user_message: str, scenario_prompt: str | None = None) -> Dict[str, str]:
         user_message_clean = user_message.strip()
         if not user_message_clean:
             self._ensure_session()
@@ -163,6 +248,9 @@ class PersonaAgent:
                 "plan": "",
             }
 
+        if scenario_prompt is not None:
+            self.set_scenario_prompt(scenario_prompt)
+
         self.ingest_user_message(user_message_clean)
         context_snippets = self._gather_context_snippets(user_message_clean)
         runtime_guidance = self._build_runtime_guidance(context_snippets)
@@ -172,15 +260,18 @@ class PersonaAgent:
             if index == total_turns - 1 and runtime_guidance:
                 messages.extend(runtime_guidance)
             messages.append({"role": turn.role, "content": turn.content})
-        draft = self.llm.complete(messages, max_tokens=600)
-        reflection, reply_body, follow_up = self._parse_structured_reply(draft)
+
+        raw_response = self.llm.complete(messages, max_tokens=600)
+        reflection, reply_body, follow_up = self._parse_structured_reply(raw_response)
         final_reply = self._sanitize_reply(reply_body.strip())
         if not final_reply:
-            final_reply = self._sanitize_reply(draft.strip())
+            final_reply = self._sanitize_reply(raw_response.strip())
+
         assistant_turn = self.conversation.add("assistant", final_reply)
         assistant_turn.id = long_term.add_memory(
             "assistant", final_reply, metadata={"type": "message"}
         )
+
         context_summary = self._format_context_summary(context_snippets)
         plan = follow_up.strip()
         if plan:
@@ -192,10 +283,12 @@ class PersonaAgent:
                     "seed_id": self.persona_profile.seed_id,
                 },
             )
+
         return {
             "draft": final_reply,
             "final": final_reply,
             "reflection": reflection,
+            "thinking": reflection.strip(),
             "context": context_summary,
             "plan": plan,
         }
