@@ -81,7 +81,7 @@ class PersonaAgent:
         instructions = (
             f"You are {self.persona.name}. Reply in the first person, stay grounded in the persona's "
             "voice, and keep continuity with the ongoing chat. Narrate any internal thinking in the "
-            "first person as well. It is "
+            "first person as well, and let your answer feel considered and empathetic. It is "
             "mandatory to include a brief first-person inner monologue before every reply so the "
             "user can follow your live reasoning."
         )
@@ -251,6 +251,9 @@ class PersonaAgent:
                 },
             }
             return
+
+        if scenario_prompt is not None:
+            self.set_scenario_prompt(scenario_prompt)
 
         if scenario_prompt is not None:
             self.set_scenario_prompt(scenario_prompt)
