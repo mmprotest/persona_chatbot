@@ -15,6 +15,14 @@ from app.persona_store import (
 )
 
 
+def _rerun() -> None:
+    """Trigger a Streamlit rerun compatible with newer and older versions."""
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:  # pragma: no cover - support for older Streamlit releases
+        st.experimental_rerun()
+
+
 st.set_page_config(page_title="Persona Chatbot", page_icon="🧠", layout="wide")
 
 
@@ -48,7 +56,7 @@ def set_active_persona(persona_id: int) -> None:
     persona_config, profile = _hydrate_persona(record)
     agent = create_agent(persona_config=persona_config, persona_profile=profile)
     _set_agent(agent)
-    st.experimental_rerun()
+    _rerun()
 
 
 def get_agent():
@@ -87,7 +95,7 @@ def handle_edit(index: int, turn_content: str) -> None:
     agent = get_agent()
     agent.edit_turn(index, turn_content)
     toggle_edit(index, False)
-    st.experimental_rerun()
+    _rerun()
 
 
 def render_sidebar() -> None:
@@ -99,7 +107,7 @@ def render_sidebar() -> None:
             st.session_state.last_generation = None
             if "editing" in st.session_state:
                 st.session_state.editing.clear()
-            st.experimental_rerun()
+            _rerun()
         st.divider()
         st.subheader("Persona Library")
         personas = list_personas()
@@ -161,7 +169,7 @@ def render_sidebar() -> None:
                     new_agent = create_agent(persona_config=persona_config)
                     _set_agent(new_agent)
                     st.success(f"Persona '{persona_config.name}' generated and set as active.")
-                    st.experimental_rerun()
+                    _rerun()
 
         with st.expander("Browse saved personas", expanded=False):
             if personas:
@@ -203,7 +211,7 @@ def render_sidebar() -> None:
                 agent.apply_persona_suggestion(suggestion)
                 st.session_state.persona_suggestion_input = ""
                 st.session_state.last_generation = None
-                st.experimental_rerun()
+                _rerun()
             else:
                 st.warning("Enter a suggestion before applying the update.")
         st.divider()
@@ -248,14 +256,14 @@ def render_conversation() -> None:
                 with col_cancel:
                     if st.button("Cancel", key=f"cancel_{index}"):
                         toggle_edit(index, False)
-                        st.experimental_rerun()
+                        _rerun()
                         return
             else:
                 st.markdown(turn.content)
                 if turn.editable:
                     if st.button("Edit", key=f"edit_{index}"):
                         toggle_edit(index, True)
-                        st.experimental_rerun()
+                        _rerun()
                         return
 
 
@@ -273,7 +281,7 @@ def main() -> None:
     if prompt := st.chat_input("Share a thought..."):
         result = agent.generate_response(prompt)
         st.session_state.last_generation = result
-        st.experimental_rerun()
+        _rerun()
 
 
 if __name__ == "__main__":
