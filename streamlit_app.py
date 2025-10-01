@@ -240,7 +240,10 @@ def render_sidebar() -> None:
             st.markdown(st.session_state.last_generation.get("plan", "_No plan computed._"))
 
 
-def render_conversation(agent, pending_user_message: str | None = None) -> None:
+def render_conversation(agent, pending_user_message: str | None = None):
+    """Render the conversation and optionally return streaming placeholders."""
+
+    pending_placeholders: tuple[object | None, object | None] = (None, None)
     for index, turn in enumerate(agent.conversation.turns):
         with st.chat_message(turn.role):
             is_editing = st.session_state.editing.get(index, False)
@@ -260,20 +263,23 @@ def render_conversation(agent, pending_user_message: str | None = None) -> None:
                     if st.button("Cancel", key=f"cancel_{index}"):
                         toggle_edit(index, False)
                         _rerun()
-                        return
+                        return (None, None)
             else:
                 st.markdown(turn.content)
                 if turn.editable:
                     if st.button("Edit", key=f"edit_{index}"):
                         toggle_edit(index, True)
                         _rerun()
-                        return
+                        return (None, None)
 
     if pending_user_message:
         with st.chat_message("user"):
             st.markdown(pending_user_message)
         with st.chat_message("assistant"):
-            st.markdown("_Thinking..._")
+            thinking_placeholder = st.empty()
+            reply_placeholder = st.empty()
+            pending_placeholders = (thinking_placeholder, reply_placeholder)
+    return pending_placeholders
 
 
 def main() -> None:
@@ -290,10 +296,31 @@ def main() -> None:
 
     if pending_prompt:
         with conversation_placeholder:
-            render_conversation(agent, pending_user_message=pending_prompt)
-        with st.spinner("Crafting a response..."):
-            result = agent.generate_response(pending_prompt)
+            thinking_placeholder, reply_placeholder = render_conversation(
+                agent, pending_user_message=pending_prompt
+            )
+        result: dict[str, str] | None = None
+        if thinking_placeholder is None:
+            thinking_placeholder = st.empty()
+        if reply_placeholder is None:
+            reply_placeholder = st.empty()
+        for event in agent.stream_response(pending_prompt):
+            event_type = str(event.get("type", "")).lower()
+            if event_type == "thinking":
+                thought_text = str(event.get("content", "")).strip()
+                if thought_text:
+                    thinking_placeholder.markdown(f"_Current thought:_ {thought_text}")
+                else:
+                    thinking_placeholder.markdown("_Thinking..._")
+            elif event_type == "reply":
+                reply_text = str(event.get("content", "")).strip()
+                reply_placeholder.markdown(reply_text or "")
+            elif event_type == "complete":
+                payload = event.get("result")
+                if isinstance(payload, dict):
+                    result = payload
         st.session_state.last_generation = result
+        st.session_state.pending_user_message = None
         _rerun()
         return
 
