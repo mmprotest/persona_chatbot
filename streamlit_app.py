@@ -47,6 +47,7 @@ def _set_agent(agent) -> None:
         st.session_state.editing.clear()
     st.session_state.last_generation = None
     st.session_state.current_thought_stream = None
+    st.session_state.current_thought_turn = None
 
 
 def set_active_persona(persona_id: int) -> None:
@@ -80,6 +81,8 @@ def get_agent():
         st.session_state.last_generation = None
     if "current_thought_stream" not in st.session_state:
         st.session_state.current_thought_stream = None
+    if "current_thought_turn" not in st.session_state:
+        st.session_state.current_thought_turn = None
     return st.session_state.agent
 
 
@@ -109,6 +112,7 @@ def render_sidebar() -> None:
             agent.reset()
             st.session_state.last_generation = None
             st.session_state.current_thought_stream = None
+            st.session_state.current_thought_turn = None
             if "editing" in st.session_state:
                 st.session_state.editing.clear()
             _rerun()
@@ -220,6 +224,7 @@ def render_sidebar() -> None:
                 st.session_state.clear_persona_suggestion_input = True
                 st.session_state.last_generation = None
                 st.session_state.current_thought_stream = None
+                st.session_state.current_thought_turn = None
                 _rerun()
             else:
                 st.warning("Enter a suggestion before applying the update.")
@@ -322,6 +327,27 @@ def main() -> None:
         st.subheader("Current Thought Stream")
         thought_placeholder = st.empty()
         current_thought = st.session_state.get("current_thought_stream")
+        assistant_indices = [
+            idx
+            for idx, turn in enumerate(agent.conversation.turns)
+            if turn.role == "assistant"
+        ]
+        latest_assistant_index = assistant_indices[-1] if assistant_indices else None
+        current_turn_index = st.session_state.get("current_thought_turn")
+        if current_turn_index is not None and current_turn_index != latest_assistant_index:
+            current_thought = None
+            st.session_state.current_thought_stream = None
+            st.session_state.current_thought_turn = None
+        if (
+            not current_thought
+            and st.session_state.last_generation
+            and latest_assistant_index is not None
+        ):
+            stored_thinking = st.session_state.last_generation.get("thinking")
+            if stored_thinking:
+                current_thought = f"_Current thought:_ {stored_thinking}"
+                st.session_state.current_thought_stream = current_thought
+                st.session_state.current_thought_turn = latest_assistant_index
         if current_thought:
             thought_placeholder.markdown(current_thought)
         else:
@@ -332,6 +358,7 @@ def main() -> None:
         if reply_placeholder is None:
             reply_placeholder = st.empty()
         thinking_seen = False
+        final_thought_display = None
         for event in agent.stream_response(pending_prompt):
             event_type = str(event.get("type", "")).lower()
             if event_type == "thinking":
@@ -344,6 +371,8 @@ def main() -> None:
                 if thought_placeholder is not None:
                     thought_placeholder.markdown(display_text)
                 st.session_state.current_thought_stream = display_text
+                st.session_state.current_thought_turn = None
+                final_thought_display = display_text
             elif event_type == "reply":
                 reply_text = str(event.get("content", "")).strip()
                 reply_placeholder.markdown(reply_text or "")
@@ -351,13 +380,20 @@ def main() -> None:
                 payload = event.get("result")
                 if isinstance(payload, dict):
                     result = payload
-        if not thinking_seen and result and result.get("reflection"):
-            fallback_text = str(result["reflection"]).strip()
+        if result:
+            fallback_text = ""
+            if result.get("thinking"):
+                fallback_text = str(result["thinking"]).strip()
+            elif not thinking_seen and result.get("reflection"):
+                fallback_text = str(result["reflection"]).strip()
             if fallback_text:
                 display_text = f"_Current thought:_ {fallback_text}"
-                if thought_placeholder is not None:
-                    thought_placeholder.markdown(display_text)
+                if display_text != final_thought_display:
+                    if thought_placeholder is not None:
+                        thought_placeholder.markdown(display_text)
                 st.session_state.current_thought_stream = display_text
+                st.session_state.current_thought_turn = len(agent.conversation.turns) - 1
+                final_thought_display = display_text
         st.session_state.last_generation = result
         st.session_state.pending_user_message = None
         _rerun()
@@ -366,6 +402,7 @@ def main() -> None:
     if prompt := st.chat_input("Share a thought..."):
         st.session_state.pending_user_message = prompt
         st.session_state.current_thought_stream = None
+        st.session_state.current_thought_turn = None
         _rerun()
 
 

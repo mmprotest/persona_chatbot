@@ -215,6 +215,8 @@ class PersonaAgent:
         last_thinking = ""
         last_reply = ""
         thinking_emitted = False
+        final_thinking_snapshot = ""
+
         for chunk in self.llm.stream_complete(messages, max_tokens=600):
             if not chunk:
                 continue
@@ -224,6 +226,8 @@ class PersonaAgent:
                 snapshot = thinking.strip()
                 if snapshot != last_thinking:
                     last_thinking = snapshot
+                    final_thinking_snapshot = snapshot
+
                     thinking_emitted = True
                     yield {"type": "thinking", "content": snapshot}
             reply_body, _ = self._extract_tag_snapshot(buffer, "reply")
@@ -234,10 +238,13 @@ class PersonaAgent:
                     yield {"type": "reply", "content": snapshot_reply}
 
         reflection, reply_body, follow_up = self._parse_structured_reply(buffer)
-        if reflection and not thinking_emitted:
-            sanitized_reflection = reflection.strip()
-            if sanitized_reflection:
-                yield {"type": "thinking", "content": sanitized_reflection}
+        final_thinking = reflection.strip() if reflection else ""
+        if not final_thinking:
+            final_thinking = final_thinking_snapshot.strip()
+        if final_thinking:
+            if not thinking_emitted or final_thinking != last_thinking.strip():
+                final_thinking_snapshot = final_thinking
+                yield {"type": "thinking", "content": final_thinking}
                 thinking_emitted = True
         final_reply = self._sanitize_reply(reply_body.strip())
         if not final_reply:
@@ -263,6 +270,7 @@ class PersonaAgent:
                 "draft": final_reply,
                 "final": final_reply,
                 "reflection": reflection,
+                "thinking": final_thinking_snapshot.strip(),
                 "context": context_summary,
                 "plan": plan,
             },
