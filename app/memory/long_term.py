@@ -138,3 +138,17 @@ def search_memories(query: str, limit: int | None = None) -> List[dict]:
         )
     memories.sort(key=lambda item: item["similarity"], reverse=True)
     return memories[:limit]
+
+
+def has_seed(seed_id: str) -> bool:
+    """Return ``True`` if a persona seed with the given identifier exists."""
+
+    if not seed_id:
+        return False
+    pattern = f'%"seed_id": "{seed_id}"%'
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM memories WHERE metadata LIKE ? LIMIT 1",
+            (pattern,),
+        ).fetchone()
+    return row is not None

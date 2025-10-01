@@ -42,6 +42,10 @@ class PersonaConfig:
             "grow the relationship over time."
         ),
     )
+    seed_prompt: str = os.getenv(
+        "PERSONA_SEED",
+        "",
+    )
 
 
 @dataclass(slots=True)

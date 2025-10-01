@@ -43,6 +43,16 @@ def render_sidebar() -> None:
                 st.session_state.editing.clear()
             st.experimental_rerun()
         st.divider()
+        st.subheader("Persona Profile")
+        profile = agent.persona_profile
+        st.markdown(
+            f"**{profile.biography}**\n\n"
+            f"**Traits:** {', '.join(profile.traits)}\n\n"
+            f"**Speaking style:** {profile.speaking_style}\n\n"
+            f"**Interests:** {', '.join(profile.interests)}\n\n"
+            f"**Daily rhythm:** {profile.daily_routine}",
+        )
+        st.divider()
         st.subheader("Recent Memories")
         for record in agent.load_recent_memories():
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record["created_at"]))
@@ -59,6 +69,9 @@ def render_sidebar() -> None:
             st.divider()
             st.subheader("Context Used")
             st.markdown(st.session_state.last_generation.get("context", "_No additional context._"))
+            st.divider()
+            st.subheader("Forward Plan")
+            st.markdown(st.session_state.last_generation.get("plan", "_No plan computed._"))
 
 
 def render_conversation() -> None:

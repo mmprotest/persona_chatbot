@@ -7,7 +7,7 @@ from typing import Dict, List
 from .llm.factory import create_llm_client
 from .memory import long_term
 from .memory.conversation import ConversationBuffer
-from .persona import persona
+from .persona import PersonaProfile, persona
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -19,14 +19,22 @@ class PersonaAgent:
         self.llm = create_llm_client()
         self.conversation = ConversationBuffer()
         self._initialized = False
+        self.persona_profile: PersonaProfile = persona.generate_profile(self.llm)
+        self._seed_persona_profile()
 
     def _ensure_session(self) -> None:
         if self._initialized:
             return
-        system_prompt = persona.build_system_prompt()
+        system_prompt = persona.build_system_prompt(self.persona_profile)
         self.conversation.add("system", system_prompt, editable=False)
         self._initialized = True
         _LOGGER.debug("Initialized conversation with system prompt")
+
+    def _seed_persona_profile(self) -> None:
+        if long_term.has_seed(self.persona_profile.seed_id):
+            return
+        for entry in self.persona_profile.seed_memories():
+            long_term.add_memory(entry.role, entry.content, metadata=entry.metadata)
 
     def reset(self) -> None:
         self.conversation.clear()
@@ -105,11 +113,22 @@ class PersonaAgent:
             reflection,
             metadata={"type": "reflection", "source": "self"},
         )
+        plan = self._forecast_next_steps(user_message, improved)
+        if plan.strip():
+            long_term.add_memory(
+                "assistant_plan",
+                plan,
+                metadata={
+                    "type": "forward_plan",
+                    "seed_id": self.persona_profile.seed_id,
+                },
+            )
         return {
             "draft": draft,
             "final": improved,
             "reflection": reflection,
             "context": context_prompt,
+            "plan": plan,
         }
 
     def edit_turn(self, index: int, new_content: str) -> None:
@@ -130,6 +149,15 @@ class PersonaAgent:
             }
             for record in records
         ]
+
+    def _forecast_next_steps(self, user_message: str, assistant_reply: str) -> str:
+        prompt = (
+            "Consider the persona's biography, interests, and relationships. The user just said: "
+            f"{user_message!r}. The assistant replied: {assistant_reply!r}. "
+            "Outline 2-3 actionable bullet points describing how the assistant should nurture the relationship, "
+            "anticipate future topics, or suggest follow-up questions. Be specific and stay in character."
+        )
+        return self.llm.reflect(prompt, max_tokens=300)
 
 
 def create_agent() -> PersonaAgent:
