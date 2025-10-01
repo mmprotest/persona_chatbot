@@ -25,6 +25,8 @@ class PersonaAgent:
         self.llm = create_llm_client()
         self.conversation = ConversationBuffer()
         self._initialized = False
+        self._scenario_prompt: str = ""
+        self._scenario_turn_index: int | None = None
         self.persona = persona_config or persona
         if persona_profile is None:
             self.persona_profile = self.persona.generate_profile(self.llm)
@@ -39,6 +41,9 @@ class PersonaAgent:
         system_prompt = self.persona.build_system_prompt(self.persona_profile)
         self.conversation.add("system", system_prompt, editable=False)
         self._initialized = True
+        self._scenario_turn_index = None
+        if self._scenario_prompt:
+            self._apply_scenario_prompt()
         _LOGGER.debug("Initialized conversation with system prompt")
 
     def _seed_persona_profile(self) -> None:
@@ -50,6 +55,7 @@ class PersonaAgent:
     def reset(self) -> None:
         self.conversation.clear()
         self._initialized = False
+        self._scenario_turn_index = None
 
     def ingest_user_message(self, content: str) -> None:
         self._ensure_session()
@@ -75,7 +81,7 @@ class PersonaAgent:
         instructions = (
             f"You are {self.persona.name}. Reply in the first person, stay grounded in the persona's "
             "voice, and keep continuity with the ongoing chat. Narrate any internal thinking in the "
-            "first person as well, and let your answer feel considered and empathetic. It is "
+            "first person as well. It is "
             "mandatory to include a brief first-person inner monologue before every reply so the "
             "user can follow your live reasoning."
         )
@@ -185,7 +191,52 @@ class PersonaAgent:
         return reply.strip()
 
 
-    def stream_response(self, user_message: str) -> Iterator[dict[str, object]]:
+    def set_scenario_prompt(self, scenario_prompt: str) -> None:
+        """Update the active scenario context for the conversation."""
+
+        normalized = scenario_prompt.strip()
+        if normalized == self._scenario_prompt:
+            return
+
+        self._scenario_prompt = normalized
+        if self._initialized:
+            self._apply_scenario_prompt()
+        else:
+            self._scenario_turn_index = None
+
+    def _apply_scenario_prompt(self) -> None:
+        """Ensure the scenario context is represented in the conversation history."""
+
+        scenario = self._scenario_prompt.strip()
+
+        if not self._initialized:
+            if not scenario:
+                self._scenario_turn_index = None
+            return
+
+        if not scenario:
+            if self._scenario_turn_index is not None and 0 <= self._scenario_turn_index < len(
+                self.conversation.turns
+            ):
+                self.conversation.turns.pop(self._scenario_turn_index)
+            self._scenario_turn_index = None
+            return
+
+        content = f"Scenario context: {scenario}"
+        if self._scenario_turn_index is not None and 0 <= self._scenario_turn_index < len(
+            self.conversation.turns
+        ):
+            self.conversation.update(self._scenario_turn_index, content)
+            return
+
+        insert_at = 1 if self.conversation.turns and self.conversation.turns[0].role == "system" else 0
+        self.conversation.turns.insert(
+            insert_at,
+            ConversationTurn(role="system", content=content, editable=False),
+        )
+        self._scenario_turn_index = insert_at
+
+    def generate_response(self, user_message: str, scenario_prompt: str | None = None) -> Dict[str, str]:
         user_message_clean = user_message.strip()
         if not user_message_clean:
             self._ensure_session()
@@ -200,6 +251,9 @@ class PersonaAgent:
                 },
             }
             return
+
+        if scenario_prompt is not None:
+            self.set_scenario_prompt(scenario_prompt)
 
         self.ingest_user_message(user_message_clean)
         context_snippets = self._gather_context_snippets(user_message_clean)
