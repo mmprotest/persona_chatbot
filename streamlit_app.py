@@ -46,6 +46,7 @@ def _set_agent(agent) -> None:
     else:
         st.session_state.editing.clear()
     st.session_state.last_generation = None
+    st.session_state.current_thought_stream = None
 
 
 def set_active_persona(persona_id: int) -> None:
@@ -77,6 +78,8 @@ def get_agent():
         st.session_state.editing = {}
     if "last_generation" not in st.session_state:
         st.session_state.last_generation = None
+    if "current_thought_stream" not in st.session_state:
+        st.session_state.current_thought_stream = None
     return st.session_state.agent
 
 
@@ -105,6 +108,7 @@ def render_sidebar() -> None:
         if st.button("Reset Conversation", use_container_width=True):
             agent.reset()
             st.session_state.last_generation = None
+            st.session_state.current_thought_stream = None
             if "editing" in st.session_state:
                 st.session_state.editing.clear()
             _rerun()
@@ -215,6 +219,7 @@ def render_sidebar() -> None:
                 agent.apply_persona_suggestion(suggestion)
                 st.session_state.clear_persona_suggestion_input = True
                 st.session_state.last_generation = None
+                st.session_state.current_thought_stream = None
                 _rerun()
             else:
                 st.warning("Enter a suggestion before applying the update.")
@@ -276,9 +281,8 @@ def render_conversation(agent, pending_user_message: str | None = None):
         with st.chat_message("user"):
             st.markdown(pending_user_message)
         with st.chat_message("assistant"):
-            thinking_placeholder = st.empty()
             reply_placeholder = st.empty()
-            pending_placeholders = (thinking_placeholder, reply_placeholder)
+            pending_placeholders = (None, reply_placeholder)
     return pending_placeholders
 
 
@@ -291,17 +295,25 @@ def main() -> None:
         "local or OpenAI-compatible LLMs."
     )
 
+    thought_section = st.container()
+    with thought_section:
+        st.subheader("Current Thought Stream")
+        thought_placeholder = st.empty()
+        current_thought = st.session_state.get("current_thought_stream")
+        if current_thought:
+            thought_placeholder.markdown(current_thought)
+        else:
+            thought_placeholder.caption("No active thoughts. Send a message to see the persona think.")
+
     conversation_placeholder = st.container()
     pending_prompt = st.session_state.pop("pending_user_message", None)
 
     if pending_prompt:
         with conversation_placeholder:
-            thinking_placeholder, reply_placeholder = render_conversation(
+            _, reply_placeholder = render_conversation(
                 agent, pending_user_message=pending_prompt
             )
         result: dict[str, str] | None = None
-        if thinking_placeholder is None:
-            thinking_placeholder = st.empty()
         if reply_placeholder is None:
             reply_placeholder = st.empty()
         for event in agent.stream_response(pending_prompt):
@@ -309,9 +321,11 @@ def main() -> None:
             if event_type == "thinking":
                 thought_text = str(event.get("content", "")).strip()
                 if thought_text:
-                    thinking_placeholder.markdown(f"_Current thought:_ {thought_text}")
+                    display_text = f"_Current thought:_ {thought_text}"
                 else:
-                    thinking_placeholder.markdown("_Thinking..._")
+                    display_text = "_Thinking..._"
+                thought_placeholder.markdown(display_text)
+                st.session_state.current_thought_stream = display_text
             elif event_type == "reply":
                 reply_text = str(event.get("content", "")).strip()
                 reply_placeholder.markdown(reply_text or "")
@@ -329,6 +343,7 @@ def main() -> None:
 
     if prompt := st.chat_input("Share a thought..."):
         st.session_state.pending_user_message = prompt
+        st.session_state.current_thought_stream = None
         _rerun()
 
 
