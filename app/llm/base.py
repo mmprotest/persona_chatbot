@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import abc
-from typing import Iterable, List, Optional
+from typing import Iterable, Iterator, List, Optional
 
 
 class LLMClient(abc.ABC):
@@ -15,6 +15,22 @@ class LLMClient(abc.ABC):
     @abc.abstractmethod
     def complete(self, messages: Iterable[dict[str, str]], *, max_tokens: Optional[int] = None) -> str:
         """Generate a chat completion from the provided messages."""
+
+    def stream_complete(
+        self,
+        messages: Iterable[dict[str, str]],
+        *,
+        max_tokens: Optional[int] = None,
+    ) -> Iterator[str]:
+        """Yield a streaming chat completion.
+
+        Subclasses can override to provide streaming tokens. The default
+        implementation simply calls :meth:`complete` and yields the final
+        response once, allowing streaming consumers to operate uniformly even
+        if the underlying provider lacks native streaming support.
+        """
+
+        yield self.complete(messages, max_tokens=max_tokens)
 
     def reflect(self, prompt: str, *, max_tokens: Optional[int] = None) -> str:
         """Optionally provide a separate reflection call.

@@ -1,7 +1,7 @@
 """OpenAI-compatible chat completion client."""
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from typing import Iterable, Iterator, Optional
 
 from openai import OpenAI
 
@@ -44,3 +44,23 @@ class OpenAIClient(LLMClient):
         if content is None:
             raise RuntimeError("LLM response had empty content")
         return content.strip()
+
+    def stream_complete(
+        self,
+        messages: Iterable[dict[str, str]],
+        *,
+        max_tokens: Optional[int] = None,
+    ) -> Iterator[str]:
+        stream = self._client.chat.completions.create(
+            model=self.model,
+            messages=list(messages),
+            max_tokens=max_tokens,
+            timeout=self.request_timeout,
+            stream=True,
+        )
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta.content:
+                yield delta.content

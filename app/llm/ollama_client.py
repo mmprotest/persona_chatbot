@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from typing import Iterable, Optional
+from typing import Iterable, Iterator, Optional
 
 import requests
 
@@ -46,3 +46,35 @@ class OllamaClient(LLMClient):
         if not content:
             raise RuntimeError("Ollama response did not include content")
         return content.strip()
+
+    def stream_complete(
+        self,
+        messages: Iterable[dict[str, str]],
+        *,
+        max_tokens: Optional[int] = None,
+    ) -> Iterator[str]:
+        payload = {
+            "model": self.model,
+            "messages": list(messages),
+            "stream": True,
+        }
+        if max_tokens is not None:
+            payload["options"] = {"num_predict": max_tokens}
+        with requests.post(
+            f"{self.base_url}/api/chat",
+            data=json.dumps(payload),
+            timeout=self.request_timeout,
+            stream=True,
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                message = data.get("message", {})
+                content = message.get("content")
+                if content:
+                    yield content
