@@ -58,7 +58,7 @@ streamlit run streamlit_app.py
 
 Interact with the chatbot through the chat input. Each exchange is automatically reflected upon, refined, and stored. Use the sidebar to reset the conversation or review recent memories.
 
-The sidebar reveals the generated persona dossier so you can see the assistant's biography, traits, and daily rhythm at a glance. After each turn you'll also find the agent's self-reflection notes, the retrieved context, and a forward-looking relationship plan.
+The sidebar reveals the generated persona dossier so you can see the assistant's biography, traits, and daily rhythm at a glance. Use the **Suggest persona adjustments** box to describe tweaks you'd like to make—the agent rewrites its backstory, reseeds long-term memory, and updates the active system prompt immediately. After each turn you'll also find the agent's self-reflection notes, the retrieved context, and a forward-looking relationship plan.
 
 ### Using Ollama
 

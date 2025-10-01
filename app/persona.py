@@ -228,6 +228,41 @@ class PersonaProfile:
             )
         return entries
 
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-serialisable representation of the profile."""
+
+        return {
+            "biography": self.biography,
+            "traits": list(self.traits),
+            "speaking_style": self.speaking_style,
+            "interests": list(self.interests),
+            "timeline": [
+                {
+                    "year": item.get("year", ""),
+                    "event": item.get("event", ""),
+                    "impact": item.get("impact", ""),
+                }
+                for item in self.timeline
+            ],
+            "relationships": [
+                {
+                    "name": item.get("name", ""),
+                    "relationship": item.get("relationship", ""),
+                    "description": item.get("description", ""),
+                }
+                for item in self.relationships
+            ],
+            "signature_memories": list(self.signature_memories),
+            "daily_routine": self.daily_routine,
+            "sample_dialogues": [
+                {
+                    "scene": dialogue.get("scene", ""),
+                    "transcript": list(dialogue.get("transcript", [])),
+                }
+                for dialogue in self.sample_dialogues
+            ],
+        }
+
 
 @dataclass(slots=True)
 class Persona:
@@ -283,6 +318,54 @@ class Persona:
             data = {}
         seed_basis = "|".join(
             [self.name, self.description, self.goals, seed or "", json.dumps(data, sort_keys=True)]
+        )
+        return PersonaProfile.from_dict(data, seed_basis=seed_basis)
+
+    def adjust_profile(
+        self,
+        llm_client,
+        current_profile: PersonaProfile,
+        suggestion: str,
+    ) -> PersonaProfile:
+        """Update the persona profile based on a free-form suggestion."""
+
+        suggestion = suggestion.strip()
+        if not suggestion:
+            return current_profile
+
+        current_payload = json.dumps(current_profile.to_dict(), ensure_ascii=False, indent=2)
+        system_message = (
+            "You update existing character bibles. Respond with valid JSON only and preserve all required keys. "
+            "Incorporate the user's instructions directly into the persona's biography, traits, relationships, speaking style, "
+            "and memories so the persona evolves accordingly."
+        )
+        user_prompt = (
+            "Here is the current persona profile in JSON format:\n"
+            f"{current_payload}\n\n"
+            f"Apply the following update instructions so the persona immediately reflects them: {suggestion}.\n"
+            "Return the full, updated persona profile using the same schema."
+        )
+        try:
+            response = llm_client.complete(
+                [
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=900,
+            )
+            data = json.loads(response)
+        except Exception:  # pragma: no cover - fall back to the current profile on failure
+            return current_profile
+
+        seed_basis = "|".join(
+            [
+                self.name,
+                self.description,
+                self.goals,
+                self.seed_prompt,
+                suggestion,
+                json.dumps(data, sort_keys=True),
+            ]
         )
         return PersonaProfile.from_dict(data, seed_basis=seed_basis)
 

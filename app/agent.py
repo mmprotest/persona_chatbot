@@ -6,7 +6,7 @@ from typing import Dict, List
 
 from .llm.factory import create_llm_client
 from .memory import long_term
-from .memory.conversation import ConversationBuffer
+from .memory.conversation import ConversationBuffer, ConversationTurn
 from .persona import PersonaProfile, persona
 
 _LOGGER = logging.getLogger(__name__)
@@ -158,6 +158,51 @@ class PersonaAgent:
             "anticipate future topics, or suggest follow-up questions. Be specific and stay in character."
         )
         return self.llm.reflect(prompt, max_tokens=300)
+
+    def apply_persona_suggestion(self, suggestion: str) -> PersonaProfile:
+        """Apply a user-provided suggestion to evolve the persona in real time."""
+
+        suggestion = suggestion.strip()
+        if not suggestion:
+            return self.persona_profile
+
+        updated_profile = persona.adjust_profile(self.llm, self.persona_profile, suggestion)
+        if not isinstance(updated_profile, PersonaProfile):
+            return self.persona_profile
+
+        self.persona_profile = updated_profile
+
+        if self._initialized and self.conversation.turns:
+            new_prompt = persona.build_system_prompt(self.persona_profile)
+            first_turn = self.conversation.turns[0]
+            if first_turn.role == "system":
+                self.conversation.update(0, new_prompt)
+            else:
+                self.conversation.turns.insert(
+                    0, ConversationTurn(role="system", content=new_prompt, editable=False)
+                )
+        else:
+            self._initialized = False
+            self.conversation.clear()
+
+        long_term.add_memory(
+            "persona_update",
+            suggestion,
+            metadata={
+                "type": "persona_update_instruction",
+                "seed_id": self.persona_profile.seed_id,
+            },
+        )
+        long_term.add_memory(
+            "persona",
+            "Updated persona profile summary:\n" + self.persona_profile.system_context(),
+            metadata={
+                "type": "persona_profile",
+                "seed_id": self.persona_profile.seed_id,
+            },
+        )
+        self._seed_persona_profile()
+        return self.persona_profile
 
 
 def create_agent() -> PersonaAgent:

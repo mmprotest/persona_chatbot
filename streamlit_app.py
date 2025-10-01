@@ -52,6 +52,25 @@ def render_sidebar() -> None:
             f"**Interests:** {', '.join(profile.interests)}\n\n"
             f"**Daily rhythm:** {profile.daily_routine}",
         )
+        with st.form("persona_suggestion_form", clear_on_submit=False):
+            suggestion = st.text_area(
+                "Suggest persona adjustments",
+                key="persona_suggestion_input",
+                help=(
+                    "Describe how you'd like the persona to evolve. The agent will rewrite its backstory, "
+                    "traits, and seed memories to match."
+                ),
+                height=120,
+            )
+            submitted = st.form_submit_button("Apply Persona Update", use_container_width=True)
+        if submitted:
+            if suggestion.strip():
+                agent.apply_persona_suggestion(suggestion)
+                st.session_state.persona_suggestion_input = ""
+                st.session_state.last_generation = None
+                st.experimental_rerun()
+            else:
+                st.warning("Enter a suggestion before applying the update.")
         st.divider()
         st.subheader("Recent Memories")
         for record in agent.load_recent_memories():
