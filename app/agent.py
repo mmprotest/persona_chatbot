@@ -115,14 +115,16 @@ class PersonaAgent:
         )
         draft = self.llm.complete(messages, max_tokens=800)
         reflection = self._generate_reflection(user_message, draft)
+        reflection_clean = reflection.strip()
         improved = self._apply_reflection(reflection, draft)
         assistant_turn = self.conversation.add("assistant", improved)
         assistant_turn.id = long_term.add_memory("assistant", improved, metadata={"type": "message"})
-        long_term.add_memory(
-            "assistant_reflection",
-            reflection,
-            metadata={"type": "reflection", "source": "self"},
-        )
+        if reflection_clean:
+            long_term.add_memory(
+                "assistant_reflection",
+                reflection_clean,
+                metadata={"type": "reflection", "source": "self"},
+            )
         plan = self._forecast_next_steps(user_message, improved)
         if plan.strip():
             long_term.add_memory(
