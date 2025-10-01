@@ -139,6 +139,7 @@ class PersonaAgent:
         )
         return reply.strip()
 
+
     def _sanitize_reply(self, reply: str) -> str:
         """Remove accidental meta-commentary so the user only sees the response."""
 
@@ -168,6 +169,7 @@ class PersonaAgent:
         if sanitized:
             return sanitized
         return reply.strip()
+
 
     def generate_response(self, user_message: str) -> Dict[str, str]:
         user_message_clean = user_message.strip()
@@ -219,11 +221,14 @@ class PersonaAgent:
         final_reply = improved.strip()
         fallback_used = False
         final_reply = self._sanitize_reply(final_reply)
+
         if self._needs_fallback(user_message, final_reply):
             fallback_used = True
             final_reply = self._fallback_reply(user_message)
             improved = final_reply
+
         final_reply = self._sanitize_reply(final_reply)
+
         if not final_reply:
             draft_clean = draft.strip()
             if draft_clean:
