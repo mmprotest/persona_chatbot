@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -52,9 +52,9 @@ class PersonaConfig:
 class AppConfig:
     """Top-level application configuration."""
 
-    llm: LLMConfig = LLMConfig()
-    memory: MemoryConfig = MemoryConfig()
-    persona: PersonaConfig = PersonaConfig()
+    llm: LLMConfig = field(default_factory=LLMConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
+    persona: PersonaConfig = field(default_factory=PersonaConfig)
 
 
 config = AppConfig()
