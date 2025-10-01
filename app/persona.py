@@ -299,6 +299,87 @@ class Persona:
             prompt += "\n\n" + profile.system_context()
         return prompt
 
+    def _fallback_profile_blueprint(self) -> dict[str, object]:
+        """Return a persona-aware fallback profile when generation fails."""
+
+        name = self.name.strip() or "The persona"
+        description = self.description.strip() or "a thoughtful companion"
+        goals = self.goals.strip() or "connect deeply with conversation partners"
+        seed = self.seed_prompt.strip()
+
+        biography_lines = [
+            f"{name} is {description}.",
+            f"They are driven to {goals.lower()}.",
+        ]
+        if seed:
+            biography_lines.append(f"Inspired by: {seed}.")
+        biography = " ".join(biography_lines)
+
+        speaking_style = (
+            "I speak in the first person, weaving sensory detail into my stories and checking in with my "
+            "conversation partner's feelings."
+        )
+        interests = [
+            "meaningful conversation",
+            "noticing small details",
+            "building trust",
+        ]
+        timeline = [
+            {
+                "year": "Formative years",
+                "event": f"Discovered a love for {interests[0]}",
+                "impact": "Realised that attentive listening creates lasting bonds.",
+            },
+            {
+                "year": "Recent times",
+                "event": f"Focused on {goals.lower()}",
+                "impact": "Keeps conversations grounded in empathy and curiosity.",
+            },
+        ]
+        if seed:
+            timeline.append(
+                {
+                    "year": "Personal inspiration",
+                    "event": seed,
+                    "impact": "Shapes the way they open up about their life experiences.",
+                }
+            )
+        relationships = [
+            {
+                "name": "A close confidant",
+                "relationship": "Friend",
+                "description": "They swap thoughtful letters every month to stay in sync.",
+            }
+        ]
+        signature_memories = [
+            "Sharing a heartfelt conversation on a quiet evening walk.",
+            "Realising their words helped someone feel seen.",
+        ]
+        sample_dialogues = [
+            {
+                "scene": "Late-night check-in",
+                "transcript": [
+                    "Friend: I can't shake this feeling that I'm stuck.",
+                    f"{name}: Let's take a breath together. Tell me what made today feel heavy?",
+                    "Friend: You always know how to help me unpack it.",
+                ],
+            }
+        ]
+        return {
+            "biography": biography,
+            "traits": ["empathetic", "observant", "grounded"],
+            "speaking_style": speaking_style,
+            "interests": interests,
+            "timeline": timeline,
+            "relationships": relationships,
+            "signature_memories": signature_memories,
+            "daily_routine": (
+                "Starts the morning reflecting with a warm drink, spends afternoons connecting with others, and winds down "
+                "by journaling insights from the day."
+            ),
+            "sample_dialogues": sample_dialogues,
+        }
+
     def generate_profile(self, llm_client) -> PersonaProfile:
         """Request a richly detailed persona profile from the LLM."""
 
@@ -331,10 +412,20 @@ class Persona:
             data = json.loads(response)
         except Exception:  # pragma: no cover - best-effort parsing fallback
             data = {}
+        fallback = self._fallback_profile_blueprint()
+        if not isinstance(data, dict):
+            data = {}
+        merged: dict[str, object] = fallback.copy()
+        for key, value in data.items():
+            if value in (None, ""):
+                continue
+            if isinstance(value, (list, dict)) and not value:
+                continue
+            merged[key] = value
         seed_basis = "|".join(
-            [self.name, self.description, self.goals, seed or "", json.dumps(data, sort_keys=True)]
+            [self.name, self.description, self.goals, seed or "", json.dumps(merged, sort_keys=True)]
         )
-        return PersonaProfile.from_dict(data, seed_basis=seed_basis)
+        return PersonaProfile.from_dict(merged, seed_basis=seed_basis)
 
     def adjust_profile(
         self,
